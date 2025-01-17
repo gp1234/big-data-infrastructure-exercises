@@ -1,7 +1,6 @@
-.git
-__pycache__
+__pycache__/
 *.pyc
-*.pyo
-.DS_Store
-node_modules
 *.log
+.env
+.venv/
+tests/

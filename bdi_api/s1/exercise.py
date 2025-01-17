@@ -6,6 +6,13 @@ from fastapi.params import Query
 
 from bdi_api.settings import Settings
 
+import time
+import shutil
+import requests
+from bs4 import BeautifulSoup
+import json
+
+
 settings = Settings()
 
 s1 = APIRouter(
@@ -30,7 +37,7 @@ def download_data(
     go in ascending order in order to correctly obtain the results.
     I'll test with increasing number of files starting from 100.""",
         ),
-    ] = 100,
+    ] = 1,
 ) -> str:
     """Downloads the `file_limit` files AS IS inside the folder data/20231101
 
@@ -51,8 +58,31 @@ def download_data(
     download_dir = os.path.join(settings.raw_dir, "day=20231101")
     base_url = settings.source_url + "/2023/11/01/"
     # TODO Implement download
+    if os.path.exists(download_dir):
+        shutil.rmtree(download_dir)
+    os.makedirs(download_dir, exist_ok=True)
+    
+    response = requests.get(base_url)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "lxml")
+    
+    links = soup.find_all("a", href=True)
+    file_links = [link["href"] for link in links if link["href"].endswith(".json.gz")]
+    
+    file_links = file_links[:file_limit]
 
-    return "OK"
+    for file_name in file_links:
+        file_url = base_url + file_name
+        save_path = os.path.join(download_dir, file_name)
+        print(f"Downloading {file_url}...")
+        file_response = requests.get(file_url, stream=True)
+        file_response.raise_for_status()
+        with open(save_path, "wb") as file:
+            for chunk in file_response.iter_content(chunk_size=8192):
+                file.write(chunk)
+        time.sleep(2)
+
+    return f"Downloaded {len(file_links)} files"
 
 
 @s1.post("/aircraft/prepare")
@@ -75,7 +105,40 @@ def prepare_data() -> str:
     Keep in mind that we are downloading a lot of small files, and some libraries might not work well with this!
     """
     # TODO
-    return "OK"
+
+    download_dir = os.path.join(settings.raw_dir, "day=20231101")
+    script_dir = os.path.abspath(os.path.dirname(__file__))
+    base_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "data"))
+    prepared_dir = os.path.join(base_dir, "prepared")
+    
+    for file_name in os.listdir(download_dir):
+        if file_name.endswith(".gz"):
+            base_name = file_name[:-3] 
+            old_file = os.path.join(download_dir, file_name)
+            new_file = os.path.join(download_dir, base_name)
+            os.rename(old_file, new_file)
+            
+    for file_name in os.listdir(download_dir):
+        if file_name.endswith(".json"):  
+            file_path = os.path.join(download_dir, file_name)
+            output_file_path = os.path.join(prepared_dir, file_name)
+            with open(file_path, "r") as file:
+                data = json.load(file)
+        if "aircraft" in data:
+            aircraft_data = data["aircraft"]
+            transformed_aircraft = [
+                {
+                    "icao": entry.get("hex", ""),
+                    "registration": entry.get("r", ""),
+                    "type": entry.get("t", ""), 
+                }
+                for entry in aircraft_data
+            ]
+
+            with open(output_file_path, 'w') as f:
+                json.dump(transformed_aircraft, f, indent=4)
+    
+    return "All files renamed successfully!"
 
 
 @s1.get("/aircraft/")
@@ -95,7 +158,7 @@ def get_aircraft_position(icao: str, num_results: int = 1000, page: int = 0) -> 
     # TODO implement and return a list with dictionaries with those values.
     return [{"timestamp": 1609275898.6, "lat": 30.404617, "lon": -86.476566}]
 
-
+    
 @s1.get("/aircraft/{icao}/stats")
 def get_aircraft_statistics(icao: str) -> dict:
     """Returns different statistics about the aircraft
