@@ -14,6 +14,11 @@ import json
 
 
 settings = Settings()
+script_dir = os.path.abspath(os.path.dirname(__file__))
+download_dir = os.path.join(settings.raw_dir, "day=20231101")
+base_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "data"))
+base_url = settings.source_url + "/2023/11/01/"
+prepared_dir = os.path.join(base_dir, "concatened")
 
 s1 = APIRouter(
     responses={
@@ -24,6 +29,10 @@ s1 = APIRouter(
     tags=["s1"],
 )
 
+def check_if_exixts(dir_path):
+    if os.path.exists(dir_path):
+        shutil.rmtree(dir_path)
+    os.makedirs(dir_path, exist_ok=True)
 
 @s1.post("/aircraft/download")
 def download_data(
@@ -55,12 +64,10 @@ def download_data(
 
     TIP: always clean the download folder before writing again to avoid having old files.
     """
-    download_dir = os.path.join(settings.raw_dir, "day=20231101")
-    base_url = settings.source_url + "/2023/11/01/"
+
     # TODO Implement download
-    if os.path.exists(download_dir):
-        shutil.rmtree(download_dir)
-    os.makedirs(download_dir, exist_ok=True)
+    check_if_exixts(download_dir)
+    check_if_exixts(prepared_dir)
     
     response = requests.get(base_url)
     response.raise_for_status()
@@ -106,10 +113,14 @@ def prepare_data() -> str:
     """
     # TODO
 
-    download_dir = os.path.join(settings.raw_dir, "day=20231101")
-    script_dir = os.path.abspath(os.path.dirname(__file__))
-    base_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "data"))
-    prepared_dir = os.path.join(base_dir, "prepared")
+    
+    if os.path.exists(prepared_dir):
+        for filename in os.listdir(prepared_dir):
+            file_path = os.path.join(prepared_dir, filename)
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
     
     for file_name in os.listdir(download_dir):
         if file_name.endswith(".gz"):
@@ -118,10 +129,10 @@ def prepare_data() -> str:
             new_file = os.path.join(download_dir, base_name)
             os.rename(old_file, new_file)
             
-    for file_name in os.listdir(download_dir):
+    for index, file_name in enumerate(os.listdir(download_dir)):
         if file_name.endswith(".json"):  
             file_path = os.path.join(download_dir, file_name)
-            output_file_path = os.path.join(prepared_dir, file_name)
+            output_file_path = os.path.join(prepared_dir, f"{index}.json")
             with open(file_path, "r") as file:
                 data = json.load(file)
         if "aircraft" in data:
@@ -135,8 +146,8 @@ def prepare_data() -> str:
                 for entry in aircraft_data
             ]
 
-            with open(output_file_path, 'w') as f:
-                json.dump(transformed_aircraft, f, indent=4)
+        with open(output_file_path, 'w') as f:
+            json.dump(transformed_aircraft, f, indent=4)
     
     return "All files renamed successfully!"
 
@@ -147,7 +158,16 @@ def list_aircraft(num_results: int = 100, page: int = 0) -> list[dict]:
     icao asc
     """
     # TODO
-    return [{"icao": "0d8300", "registration": "YV3382", "type": "LJ31"}]
+    
+    file_path = os.path.join(prepared_dir, f"{page}.json")
+    if not os.path.exists(file_path):
+        return []
+
+    with open(file_path, "r") as file:
+        data = json.load(file)
+    data.sort(key=lambda x: x.get("icao", ""))
+
+    return data[:num_results]
 
 
 @s1.get("/aircraft/{icao}/positions")
