@@ -142,6 +142,12 @@ def prepare_data() -> str:
                     "icao": entry.get("hex", ""),
                     "registration": entry.get("r", ""),
                     "type": entry.get("t", ""), 
+                    "lat": entry.get("lat", ""),
+                    "lon": entry.get("lon", ""),
+                    "timestamp": entry.get("seen_pos", ""),
+                    "max_alt_baro": entry.get("max_alt", ""),
+                    "max_ground_speed": entry.get("gs", ""),
+                    "had_emergency": entry.get("emergency", "").lower() != "none" if entry.get("emergency") else False,
                 }
                 for entry in aircraft_data
             ]
@@ -176,7 +182,18 @@ def get_aircraft_position(icao: str, num_results: int = 1000, page: int = 0) -> 
     If an aircraft is not found, return an empty list.
     """
     # TODO implement and return a list with dictionaries with those values.
-    return [{"timestamp": 1609275898.6, "lat": 30.404617, "lon": -86.476566}]
+    file_path = os.path.join(prepared_dir, f"{page}.json")
+    if not os.path.exists(file_path):
+        return []
+
+    with open(file_path, "r") as file:
+        data = json.load(file)
+    data.sort(key=lambda x: x.get("timestamp") if isinstance(x.get("timestamp"), (int, float)) else float('inf'))
+    positions = [entry for entry in data if entry.get("icao") == icao]
+    if not positions:
+        return []
+
+    return [{"lat": pos.get("lat"), "lon": pos.get("lon")} for pos in positions]
 
     
 @s1.get("/aircraft/{icao}/stats")
@@ -188,4 +205,18 @@ def get_aircraft_statistics(icao: str) -> dict:
     * had_emergency
     """
     # TODO Gather and return the correct statistics for the requested aircraft
-    return {"max_altitude_baro": 300000, "max_ground_speed": 493, "had_emergency": False}
+    file_path = os.path.join(prepared_dir, f"0.json")
+    if not os.path.exists(file_path):
+        return []
+
+    with open(file_path, "r") as file:
+        data = json.load(file)
+
+    positions = [entry for entry in data if entry.get("icao") == icao]
+    if not positions:
+        return []
+    return {
+        "max_altitude_baro": max(pos.get("max_alt_baro", 0) for pos in positions),
+        "max_ground_speed": max(pos.get("max_ground_speed", 0) for pos in positions),
+        "had_emergency": any(pos.get("had_emergency", False) for pos in positions),
+    }
