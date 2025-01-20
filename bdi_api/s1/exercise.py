@@ -14,11 +14,13 @@ import json
 
 
 settings = Settings()
-script_dir = os.path.abspath(os.path.dirname(__file__))
-download_dir = os.path.join(settings.raw_dir, "day=20231101")
-base_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "data"))
-base_url = settings.source_url + "/2023/11/01/"
-prepared_dir = os.path.join(base_dir, "concatened")
+
+FILE_DIRECTORY = os.path.abspath(os.path.dirname(__file__))
+WEBSITE_URL = settings.source_url + "/2023/11/01/"
+RAW_DOWNLOAD_HISTORY = os.path.join(settings.raw_dir, "day=20231101")
+BASE_DIRECTORY = os.path.abspath(os.path.join(FILE_DIRECTORY, "..", "..", "data"))
+PREPARED_DIR = os.path.join(BASE_DIRECTORY, "concatened")
+PREPARED_FILE_NAME = "concated"
 
 s1 = APIRouter(
     responses={
@@ -46,7 +48,7 @@ def download_data(
     go in ascending order in order to correctly obtain the results.
     I'll test with increasing number of files starting from 100.""",
         ),
-    ] = 1,
+    ] = 100,
 ) -> str:
     """Downloads the `file_limit` files AS IS inside the folder data/20231101
 
@@ -66,10 +68,10 @@ def download_data(
     """
 
     # TODO Implement download
-    check_if_exixts(download_dir)
-    check_if_exixts(prepared_dir)
+    check_if_exixts(RAW_DOWNLOAD_HISTORY)
+    check_if_exixts(PREPARED_DIR)
     
-    response = requests.get(base_url)
+    response = requests.get(WEBSITE_URL)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "lxml")
     
@@ -79,15 +81,15 @@ def download_data(
     file_links = file_links[:file_limit]
 
     for file_name in file_links:
-        file_url = base_url + file_name
-        save_path = os.path.join(download_dir, file_name)
+        file_url = WEBSITE_URL + file_name
+        save_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
         print(f"Downloading {file_url}...")
         file_response = requests.get(file_url, stream=True)
         file_response.raise_for_status()
         with open(save_path, "wb") as file:
             for chunk in file_response.iter_content(chunk_size=8192):
                 file.write(chunk)
-        time.sleep(2)
+        time.sleep(1)
 
     return f"Downloaded {len(file_links)} files"
 
@@ -112,50 +114,67 @@ def prepare_data() -> str:
     Keep in mind that we are downloading a lot of small files, and some libraries might not work well with this!
     """
     # TODO
-
+    output_file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
     
-    if os.path.exists(prepared_dir):
-        for filename in os.listdir(prepared_dir):
-            file_path = os.path.join(prepared_dir, filename)
+    if os.path.exists(PREPARED_DIR):
+        for filename in os.listdir(PREPARED_DIR):
+            file_path = os.path.join(PREPARED_DIR, filename)
             if os.path.isfile(file_path) or os.path.islink(file_path):
                 os.unlink(file_path)
             elif os.path.isdir(file_path):
                 shutil.rmtree(file_path)
     
-    for file_name in os.listdir(download_dir):
+    for file_name in os.listdir(RAW_DOWNLOAD_HISTORY):
         if file_name.endswith(".gz"):
             base_name = file_name[:-3] 
-            old_file = os.path.join(download_dir, file_name)
-            new_file = os.path.join(download_dir, base_name)
+            old_file = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
+            new_file = os.path.join(RAW_DOWNLOAD_HISTORY, base_name)
             os.rename(old_file, new_file)
-            
-    for index, file_name in enumerate(os.listdir(download_dir)):
+
+    all_transformed_aircraft = []
+    for index, file_name in enumerate(os.listdir(RAW_DOWNLOAD_HISTORY)):
+        print(file_name)
         if file_name.endswith(".json"):  
-            file_path = os.path.join(download_dir, file_name)
-            output_file_path = os.path.join(prepared_dir, f"{index}.json")
+            file_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
+
             with open(file_path, "r") as file:
                 data = json.load(file)
-        if "aircraft" in data:
-            aircraft_data = data["aircraft"]
-            transformed_aircraft = [
-                {
-                    "icao": entry.get("hex", ""),
-                    "registration": entry.get("r", ""),
-                    "type": entry.get("t", ""), 
-                    "lat": entry.get("lat", ""),
-                    "lon": entry.get("lon", ""),
-                    "timestamp": entry.get("seen_pos", ""),
-                    "max_alt_baro": entry.get("max_alt", ""),
-                    "max_ground_speed": entry.get("gs", ""),
-                    "had_emergency": entry.get("emergency", "").lower() != "none" if entry.get("emergency") else False,
-                }
-                for entry in aircraft_data
-            ]
-
-        with open(output_file_path, 'w') as f:
-            json.dump(transformed_aircraft, f, indent=4)
+            if "aircraft" in data:
+                aircraft_data = data["aircraft"]
+                
+                transformed_aircraft = [
+                    {
+                        "icao": entry.get("hex", ""),
+                        "registration": entry.get("r", ""),
+                        "type": entry.get("t", ""), 
+                        "lat": entry.get("lat", ""),
+                        "lon": entry.get("lon", ""),
+                        "timestamp": entry.get("seen_pos", ""),
+                        "max_alt_baro": entry.get("max_alt", ""),
+                        "max_ground_speed": entry.get("gs", ""),
+                        "had_emergency": entry.get("emergency", "").lower() != "none" if entry.get("emergency") else False,
+                        "file_name": file_name
+                    }
+                    for entry in aircraft_data
+                ]
+                
+                all_transformed_aircraft.extend(transformed_aircraft)
     
-    return "All files renamed successfully!"
+    grouped_aircraft = {}
+    for aircraft in all_transformed_aircraft:
+        icao = aircraft["icao"]
+        if icao not in grouped_aircraft:
+            grouped_aircraft[icao] = []
+        grouped_aircraft[icao].append(aircraft)
+        
+    all_transformed_aircraft = [
+        {"icao": key, "traces": [{k: v for k, v in trace.items() if k != "icao"} for trace in value]}
+        for key, value in grouped_aircraft.items()
+    ]
+    with open(output_file_path, 'w') as f:
+        json.dump(all_transformed_aircraft, f, indent=4)
+    
+    return "Files have been prepared"
 
 
 @s1.get("/aircraft/")
@@ -165,15 +184,32 @@ def list_aircraft(num_results: int = 100, page: int = 0) -> list[dict]:
     """
     # TODO
     
-    file_path = os.path.join(prepared_dir, f"{page}.json")
+    file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
     if not os.path.exists(file_path):
         return []
 
     with open(file_path, "r") as file:
         data = json.load(file)
-    data.sort(key=lambda x: x.get("icao", ""))
-
-    return data[:num_results]
+    
+    start_index = page * num_results
+    end_index = start_index + num_results
+    
+    if start_index >= len(data):
+        return []
+    end_index = min(end_index, len(data))
+    
+    data = data[start_index:end_index]
+  
+    data.sort(key=lambda x: x.get("icao"))
+    
+    return [
+        {
+            "icao": airplaine.get("icao", ""),
+            "registration": airplaine.get("traces", [{}])[0].get("registration", None) ,
+            "type": airplaine.get("traces", [{}])[0].get("type", None) ,
+        }
+        for airplaine in data
+    ]
 
 
 @s1.get("/aircraft/{icao}/positions")
@@ -182,18 +218,21 @@ def get_aircraft_position(icao: str, num_results: int = 1000, page: int = 0) -> 
     If an aircraft is not found, return an empty list.
     """
     # TODO implement and return a list with dictionaries with those values.
-    file_path = os.path.join(prepared_dir, f"{page}.json")
+    file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
     if not os.path.exists(file_path):
         return []
 
     with open(file_path, "r") as file:
         data = json.load(file)
-    data.sort(key=lambda x: x.get("timestamp") if isinstance(x.get("timestamp"), (int, float)) else float('inf'))
-    positions = [entry for entry in data if entry.get("icao") == icao]
-    if not positions:
-        return []
 
-    return [{"lat": pos.get("lat"), "lon": pos.get("lon")} for pos in positions]
+    aircraft = next((item for item in data if item["icao"] == icao), None)
+    if not aircraft:
+        return []
+    
+    traces = aircraft.get("traces", [])
+    traces.sort(key=lambda x: x.get("timestamp") if isinstance(x.get("timestamp"), (int, float)) else float('inf'))
+
+    return [{"lat": pos.get("lat"), "lon": pos.get("lon"), "timestamp": pos.get("timestamp")} for pos in traces]
 
     
 @s1.get("/aircraft/{icao}/stats")
@@ -205,18 +244,19 @@ def get_aircraft_statistics(icao: str) -> dict:
     * had_emergency
     """
     # TODO Gather and return the correct statistics for the requested aircraft
-    file_path = os.path.join(prepared_dir, f"0.json")
+    file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
     if not os.path.exists(file_path):
         return []
 
     with open(file_path, "r") as file:
         data = json.load(file)
 
-    positions = [entry for entry in data if entry.get("icao") == icao]
+
+    positions = next((item for item in data if item["icao"] == icao), None)
     if not positions:
         return []
     return {
-        "max_altitude_baro": max(pos.get("max_alt_baro", 0) for pos in positions),
-        "max_ground_speed": max(pos.get("max_ground_speed", 0) for pos in positions),
-        "had_emergency": any(pos.get("had_emergency", False) for pos in positions),
+        "max_altitude_baro": max(pos.get("max_alt_baro", 0) for pos in positions.get("traces", [])),
+        "max_ground_speed": max(pos.get("max_ground_speed", 0) for pos in positions.get("traces", [])),
+        "had_emergency": any(pos.get("had_emergency", False) for pos in positions.get("traces", [])),
     }
