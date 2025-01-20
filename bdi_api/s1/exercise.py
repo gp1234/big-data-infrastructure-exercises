@@ -229,8 +229,18 @@ def get_aircraft_position(icao: str, num_results: int = 1000, page: int = 0) -> 
     if not aircraft:
         return []
     
+
     traces = aircraft.get("traces", [])
     traces.sort(key=lambda x: x.get("timestamp") if isinstance(x.get("timestamp"), (int, float)) else float('inf'))
+    
+    start_index = page * num_results
+    end_index = start_index + num_results
+    
+    if start_index >= len(traces):
+        return []
+    end_index = min(end_index, len(traces))
+    
+    traces = traces[start_index:end_index]
 
     return [{"lat": pos.get("lat"), "lon": pos.get("lon"), "timestamp": pos.get("timestamp")} for pos in traces]
 
