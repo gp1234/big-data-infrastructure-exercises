@@ -1,17 +1,15 @@
+import json
 import os
+import shutil
+import time
 from typing import Annotated
 
+import requests
+from bs4 import BeautifulSoup
 from fastapi import APIRouter, status
 from fastapi.params import Query
 
 from bdi_api.settings import Settings
-
-import time
-import shutil
-import requests
-from bs4 import BeautifulSoup
-import json
-
 
 settings = Settings()
 
@@ -70,14 +68,14 @@ def download_data(
     # TODO Implement download
     check_if_exixts(RAW_DOWNLOAD_HISTORY)
     check_if_exixts(PREPARED_DIR)
-    
+
     response = requests.get(WEBSITE_URL)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "lxml")
-    
+
     links = soup.find_all("a", href=True)
     file_links = [link["href"] for link in links if link["href"].endswith(".json.gz")]
-    
+
     file_links = file_links[:file_limit]
 
     for file_name in file_links:
@@ -115,7 +113,7 @@ def prepare_data() -> str:
     """
     # TODO
     output_file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
-    
+
     if os.path.exists(PREPARED_DIR):
         for filename in os.listdir(PREPARED_DIR):
             file_path = os.path.join(PREPARED_DIR, filename)
@@ -123,57 +121,60 @@ def prepare_data() -> str:
                 os.unlink(file_path)
             elif os.path.isdir(file_path):
                 shutil.rmtree(file_path)
-    
+
     for file_name in os.listdir(RAW_DOWNLOAD_HISTORY):
         if file_name.endswith(".gz"):
-            base_name = file_name[:-3] 
+            base_name = file_name[:-3]
             old_file = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
             new_file = os.path.join(RAW_DOWNLOAD_HISTORY, base_name)
             os.rename(old_file, new_file)
 
     all_transformed_aircraft = []
-    for index, file_name in enumerate(os.listdir(RAW_DOWNLOAD_HISTORY)):
+    for _index, file_name in enumerate(os.listdir(RAW_DOWNLOAD_HISTORY)):
         print(file_name)
-        if file_name.endswith(".json"):  
+        if file_name.endswith(".json"):
             file_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
 
-            with open(file_path, "r") as file:
+            with open(file_path) as file:
                 data = json.load(file)
             if "aircraft" in data:
                 aircraft_data = data["aircraft"]
-                
+
                 transformed_aircraft = [
                     {
                         "icao": entry.get("hex", ""),
                         "registration": entry.get("r", ""),
-                        "type": entry.get("t", ""), 
+                        "type": entry.get("t", ""),
                         "lat": entry.get("lat", ""),
                         "lon": entry.get("lon", ""),
                         "timestamp": entry.get("seen_pos", ""),
                         "max_alt_baro": entry.get("max_alt", ""),
                         "max_ground_speed": entry.get("gs", ""),
-                        "had_emergency": entry.get("emergency", "").lower() != "none" if entry.get("emergency") else False,
+                        "had_emergency": (
+                            entry.get("emergency", "").lower() != "none"
+                            if entry.get("emergency") else False
+                        ),
                         "file_name": file_name
                     }
                     for entry in aircraft_data
                 ]
-                
+
                 all_transformed_aircraft.extend(transformed_aircraft)
-    
+
     grouped_aircraft = {}
     for aircraft in all_transformed_aircraft:
         icao = aircraft["icao"]
         if icao not in grouped_aircraft:
             grouped_aircraft[icao] = []
         grouped_aircraft[icao].append(aircraft)
-        
+
     all_transformed_aircraft = [
         {"icao": key, "traces": [{k: v for k, v in trace.items() if k != "icao"} for trace in value]}
         for key, value in grouped_aircraft.items()
     ]
     with open(output_file_path, 'w') as f:
         json.dump(all_transformed_aircraft, f, indent=4)
-    
+
     return "Files have been prepared"
 
 
@@ -183,25 +184,25 @@ def list_aircraft(num_results: int = 100, page: int = 0) -> list[dict]:
     icao asc
     """
     # TODO
-    
+
     file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
     if not os.path.exists(file_path):
         return []
 
-    with open(file_path, "r") as file:
+    with open(file_path) as file:
         data = json.load(file)
-    
+
     start_index = page * num_results
     end_index = start_index + num_results
-    
+
     if start_index >= len(data):
         return []
     end_index = min(end_index, len(data))
-    
+
     data = data[start_index:end_index]
-  
+
     data.sort(key=lambda x: x.get("icao"))
-    
+
     return [
         {
             "icao": airplaine.get("icao", ""),
@@ -222,29 +223,29 @@ def get_aircraft_position(icao: str, num_results: int = 1000, page: int = 0) -> 
     if not os.path.exists(file_path):
         return []
 
-    with open(file_path, "r") as file:
+    with open(file_path) as file:
         data = json.load(file)
 
     aircraft = next((item for item in data if item["icao"] == icao), None)
     if not aircraft:
         return []
-    
+
 
     traces = aircraft.get("traces", [])
     traces.sort(key=lambda x: x.get("timestamp") if isinstance(x.get("timestamp"), (int, float)) else float('inf'))
-    
+
     start_index = page * num_results
     end_index = start_index + num_results
-    
+
     if start_index >= len(traces):
         return []
     end_index = min(end_index, len(traces))
-    
+
     traces = traces[start_index:end_index]
 
     return [{"lat": pos.get("lat"), "lon": pos.get("lon"), "timestamp": pos.get("timestamp")} for pos in traces]
 
-    
+
 @s1.get("/aircraft/{icao}/stats")
 def get_aircraft_statistics(icao: str) -> dict:
     """Returns different statistics about the aircraft
@@ -258,7 +259,7 @@ def get_aircraft_statistics(icao: str) -> dict:
     if not os.path.exists(file_path):
         return []
 
-    with open(file_path, "r") as file:
+    with open(file_path) as file:
         data = json.load(file)
 
 
