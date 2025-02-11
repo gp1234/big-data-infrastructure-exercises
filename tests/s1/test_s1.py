@@ -1,4 +1,10 @@
 from fastapi.testclient import TestClient
+import os
+
+FILE_DIRECTORY = os.path.abspath(os.path.dirname(__file__))
+BASE_DIRECTORY = os.path.abspath(os.path.join(FILE_DIRECTORY, "..", "..", "data"))
+PREPARED_DIR = os.path.join(BASE_DIRECTORY, "concatened")
+PREPARED_FILE_NAME = "concated"
 
 
 class TestS1Student:
@@ -16,6 +22,47 @@ class TestS1Student:
         with client as client:
             response = client.post("/api/s1/aircraft/download?file_limit=1")
             assert True
+            
+    def test_download_multiple_files(self, client: TestClient) -> None:
+        with client as client:
+            response = client.post("/api/s1/aircraft/download?file_limit=5")
+            assert not response.is_error, "Error while downloading multiple files"
+
+    def test_prepare_creates_output(self, client: TestClient) -> None:
+        with client as client:
+            response = client.post("/api/s1/aircraft/prepare")
+            assert not response.is_error, "Error while preparing data"
+            
+            prepared_file = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
+            assert os.path.exists(prepared_file), "Prepared file does not exist after processing"
+
+    def test_aircraft_pagination(self, client: TestClient) -> None:
+        with client as client:
+            response = client.get("/api/s1/aircraft?num_results=2&page=1")
+            assert not response.is_error, "Error while testing pagination"
+            r = response.json()
+            assert isinstance(r, list), "Result is not a list"
+            assert len(r) <= 2, "Pagination is not working correctly"
+
+    def test_positions_empty_result(self, client: TestClient) -> None:
+        icao = "0000002821"  
+        with client as client:
+            response = client.get(f"/api/s1/aircraft/{icao}/positions")
+            assert not response.is_error, "Error while fetching positions for non-existent aircraft"
+            r = response.json()
+            assert isinstance(r, list), "Result is not a list"
+            assert len(r) == 0, "Non-existent aircraft should return an empty list"
+
+    def test_stats_field_types(self, client: TestClient) -> None:
+        icao = "06a0af"
+        with client as client:
+            response = client.get(f"/api/s1/aircraft/{icao}/stats")
+            assert not response.is_error, "Error while fetching stats"
+            r = response.json()
+            assert isinstance(r["max_altitude_baro"], (int, float)), "max_altitude_baro is not a number"
+            assert isinstance(r["max_ground_speed"], (int, float)), "max_ground_speed is not a number"
+            assert isinstance(r["had_emergency"], bool), "had_emergency is not a boolean"
+
 
 
 class TestItCanBeEvaluated:

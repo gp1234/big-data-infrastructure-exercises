@@ -3,8 +3,8 @@ import os
 import shutil
 import time
 from typing import Annotated
-
 import requests
+
 from bs4 import BeautifulSoup
 from fastapi import APIRouter, status
 from fastapi.params import Query
@@ -20,6 +20,11 @@ BASE_DIRECTORY = os.path.abspath(os.path.join(FILE_DIRECTORY, "..", "..", "data"
 PREPARED_DIR = os.path.join(BASE_DIRECTORY, "concatened")
 PREPARED_FILE_NAME = "concated"
 
+def check_if_exists(dir_path):
+    if os.path.exists(dir_path):
+        shutil.rmtree(dir_path)
+    os.makedirs(dir_path, exist_ok=True)
+
 s1 = APIRouter(
     responses={
         status.HTTP_404_NOT_FOUND: {"description": "Not found"},
@@ -29,10 +34,6 @@ s1 = APIRouter(
     tags=["s1"],
 )
 
-def check_if_exixts(dir_path):
-    if os.path.exists(dir_path):
-        shutil.rmtree(dir_path)
-    os.makedirs(dir_path, exist_ok=True)
 
 @s1.post("/aircraft/download")
 def download_data(
@@ -66,8 +67,8 @@ def download_data(
     """
 
     # TODO Implement download
-    check_if_exixts(RAW_DOWNLOAD_HISTORY)
-    check_if_exixts(PREPARED_DIR)
+    check_if_exists(RAW_DOWNLOAD_HISTORY)
+    check_if_exists(PREPARED_DIR)
 
     response = requests.get(WEBSITE_URL)
     response.raise_for_status()
@@ -232,7 +233,7 @@ def get_aircraft_position(icao: str, num_results: int = 1000, page: int = 0) -> 
 
 
     traces = aircraft.get("traces", [])
-    traces.sort(key=lambda x: x.get("timestamp") if isinstance(x.get("timestamp"), (int, float)) else float('inf'))
+    traces.sort(key=lambda x: float(x.get("timestamp")) if x.get("timestamp") else float('inf'))
 
     start_index = page * num_results
     end_index = start_index + num_results
@@ -267,7 +268,7 @@ def get_aircraft_statistics(icao: str) -> dict:
     if not positions:
         return []
     return {
-        "max_altitude_baro": max(pos.get("max_alt_baro", 0) for pos in positions.get("traces", [])),
-        "max_ground_speed": max(pos.get("max_ground_speed", 0) for pos in positions.get("traces", [])),
+        "max_altitude_baro": max(float(pos.get("max_alt_baro")) if pos.get("max_alt_baro") else 0 for pos in positions.get("traces", [])),
+        "max_ground_speed": max(float(pos.get("max_ground_speed")) if pos.get("max_ground_speed") else 0 for pos in positions.get("traces", [])),
         "had_emergency": any(pos.get("had_emergency", False) for pos in positions.get("traces", [])),
     }

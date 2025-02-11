@@ -1,0 +1,178 @@
+============================= test session starts ==============================
+collecting ... collected 19 items
+
+evaluation/s1/test_s1.py::TestEvaluateS1::test_download PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_1000_files PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_preparation PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_aircrafts_schema PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_all_aircrafts_no_duplicates PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_all_aircrafts_count PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_aircraft_paging[138] PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_aircraft_paging[20] PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_statistics[040014-expected0] FAILED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_statistics[a095f0-expected1] FAILED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_statistics[abf2c2-expected2] FAILED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_aircraft_stats_schema FAILED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_positions_ordered_asc[a972d3] FAILED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_non_existent_position PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_aircraft_position_schema PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_positions[040014-199] PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_positions[a972d3-968] PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_positions_num_results[10] PASSED
+evaluation/s1/test_s1.py::TestEvaluateS1::test_positions_num_results[720] PASSED
+
+=================================== FAILURES ===================================
+_______________ TestEvaluateS1.test_statistics[040014-expected0] _______________
+
+icao = '040014'
+
+    @s1.get("/aircraft/{icao}/stats")
+    def get_aircraft_statistics(icao: str) -> dict:
+        """Returns different statistics about the aircraft
+    
+        * max_altitude_baro
+        * max_ground_speed
+        * had_emergency
+        """
+        # TODO Gather and return the correct statistics for the requested aircraft
+        file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
+        if not os.path.exists(file_path):
+            return []
+    
+        with open(file_path) as file:
+            data = json.load(file)
+    
+    
+        positions = next((item for item in data if item["icao"] == icao), None)
+        if not positions:
+            return []
+        return {
+            "max_altitude_baro": max(pos.get("max_alt_baro", 0) for pos in positions.get("traces", [])),
+>           "max_ground_speed": max(pos.get("max_ground_speed", 0) for pos in positions.get("traces", [])),
+            "had_emergency": any(pos.get("had_emergency", False) for pos in positions.get("traces", [])),
+        }
+E       TypeError: '>' not supported between instances of 'str' and 'float'
+
+bdi_api/s1/exercise.py:271: TypeError
+_______________ TestEvaluateS1.test_statistics[a095f0-expected1] _______________
+
+icao = 'a095f0'
+
+    same error as before
+
+bdi_api/s1/exercise.py:271: TypeError
+_______________ TestEvaluateS1.test_statistics[abf2c2-expected2] _______________
+
+icao = 'abf2c2'
+
+    Same error as before
+__________________ TestEvaluateS1.test_aircraft_stats_schema ___________________
+
+icao = 'a095f0'
+
+    @s1.get("/aircraft/{icao}/stats")
+    def get_aircraft_statistics(icao: str) -> dict:
+        """Returns different statistics about the aircraft
+    
+        * max_altitude_baro
+        * max_ground_speed
+        * had_emergency
+        """
+        # TODO Gather and return the correct statistics for the requested aircraft
+        file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
+        if not os.path.exists(file_path):
+            return []
+    
+        with open(file_path) as file:
+            data = json.load(file)
+    
+    
+        positions = next((item for item in data if item["icao"] == icao), None)
+        if not positions:
+            return []
+        return {
+            "max_altitude_baro": max(pos.get("max_alt_baro", 0) for pos in positions.get("traces", [])),
+>           "max_ground_speed": max(pos.get("max_ground_speed", 0) for pos in positions.get("traces", [])),
+            "had_emergency": any(pos.get("had_emergency", False) for pos in positions.get("traces", [])),
+        }
+E       TypeError: '>' not supported between instances of 'str' and 'float'
+
+bdi_api/s1/exercise.py:271: TypeError
+______________ TestEvaluateS1.test_positions_ordered_asc[a972d3] _______________
+
+self = <s1.test_s1.TestEvaluateS1 object at 0x7f810775bc50>
+client = <starlette.testclient.TestClient object at 0x7f810773f310>
+icao = 'a972d3'
+json_metadata = {'name': 'test_positions_ordered_asc', 'time': 14962}
+request = <FixtureRequest for <Function test_positions_ordered_asc[a972d3]>>
+
+    @pytest.mark.parametrize("icao", ["a972d3"])
+    def test_positions_ordered_asc(self, client, icao, json_metadata, request) -> None:
+        start = int(round(time.time() * 1000))
+        # Given
+        # When
+        results = []
+        with client as client:  # Always do this
+            page = 0
+            r = client.get(
+                f"/api/s1/aircraft/{icao}/positions?num_results=1000&page={page}"
+            )
+            assert r.status_code == 200
+            response = r.json()
+            results.extend(a["timestamp"] for a in response)
+            while response and len(response) == 1000 and page < 100:
+                page += 1
+                r = client.get(
+                    f"/api/s1/aircraft/{icao}/positions?num_results=1000&page={page}"
+                )
+                assert r.status_code == 200
+                response = r.json()
+                results.extend(a["timestamp"] for a in response)
+        elapsed = int(round(time.time() * 1000)) - start
+        add_metadata(json_metadata, request, elapsed)
+        # Then
+        assert len(results) > 1
+>       assert sorted(results.copy()) == results
+E       TypeError: '<' not supported between instances of 'str' and 'float'
+
+evaluation/s1/test_s1.py:222: TypeError
+==================================== PASSES ====================================
+--------------------------------- JSON report ----------------------------------
+report saved to: .pytest.json
+=========================== short test summary info ============================
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_download
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_1000_files
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_preparation
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_aircrafts_schema
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_all_aircrafts_no_duplicates
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_all_aircrafts_count
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_aircraft_paging[138]
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_aircraft_paging[20]
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_non_existent_position
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_aircraft_position_schema
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_positions[040014-199]
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_positions[a972d3-968]
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_positions_num_results[10]
+PASSED evaluation/s1/test_s1.py::TestEvaluateS1::test_positions_num_results[720]
+FAILED evaluation/s1/test_s1.py::TestEvaluateS1::test_statistics[040014-expected0]
+FAILED evaluation/s1/test_s1.py::TestEvaluateS1::test_statistics[a095f0-expected1]
+FAILED evaluation/s1/test_s1.py::TestEvaluateS1::test_statistics[abf2c2-expected2]
+FAILED evaluation/s1/test_s1.py::TestEvaluateS1::test_aircraft_stats_schema
+FAILED evaluation/s1/test_s1.py::TestEvaluateS1::test_positions_ordered_asc[a972d3]
+================== 5 failed, 14 passed in 2431.52s (0:40:31) ===================
+============================= test session starts ==============================
+collecting ... collected 6 items / 5 deselected / 1 selected
+
+tests/s1/test_s1.py::TestS1Student::test_first Downloading http://localhost:8001/2023/11/01/000000Z.json.gz...
+PASSED
+
+==================================== PASSES ====================================
+--------------------------------- JSON report ----------------------------------
+report saved to: .pytest.student.json
+
+---------- coverage: platform linux, python 3.11.2-final-0 -----------
+Coverage JSON written to file .coverage.json
+
+=========================== short test summary info ============================
+PASSED tests/s1/test_s1.py::TestS1Student::test_first
+======================= 1 passed, 5 deselected in 7.34s ========================
