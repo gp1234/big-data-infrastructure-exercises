@@ -30,6 +30,7 @@ opentelemetry-sdk = "1.21.0"
 opentelemetry-instrumentation-fastapi = "0.42b0"
 # Add your dependencies here
 beautifulsoup4 = "^4.12.3"
+boto3 = "^1.36.17"
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^3.5.0"

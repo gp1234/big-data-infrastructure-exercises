@@ -31,6 +31,10 @@ class Settings(BaseSettings):
         default="bdi-test",
         description="Call the api like `BDI_S3_BUCKET=yourbucket poetry run uvicorn...`",
     )
+    s3_bucket_name : str = Field(
+        default="bdi-aircraft-gio-s3",
+        description="The S3 bucket name",
+    )
 
 
     telemetry: bool = False
