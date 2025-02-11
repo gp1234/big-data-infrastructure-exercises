@@ -1,18 +1,24 @@
 from typing import Annotated
-
+import shutil
 from fastapi import APIRouter, status
 from fastapi.params import Query
 from bdi_api.settings import Settings
 import boto3
 import os
+import requests
+import time
+from bs4 import BeautifulSoup
 
 settings = Settings()
 s3_client = boto3.client('s3')
 
-FILE_DIRECTORY = os.path.abspath(os.path.dirname(__file__))
-RAW_DOWNLOAD_HISTORY = os.path.join(settings.raw_dir, "day=20231101")
-BASE_DIRECTORY = os.path.abspath(os.path.join(FILE_DIRECTORY, "..", "..", "data"))
-PREPARED_DIR = os.path.join(settings.prepared_dir, "concatened")
+def check_if_exists(dir_path):
+    if os.path.exists(dir_path):
+        shutil.rmtree(dir_path)
+    os.makedirs(dir_path, exist_ok=True)
+
+
+RAW_DOWNLOAD_HISTORY = os.path.join(settings.raw_dir_1, "day=20231101")
 
 s4 = APIRouter(
     responses={
@@ -47,6 +53,28 @@ def download_data(
     s3_bucket = settings.s3_bucket
     s3_prefix_path = "raw/day=20231101/"
     # TODO
+    check_if_exists(RAW_DOWNLOAD_HISTORY)
+    response = requests.get(base_url)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "lxml")
+
+    links = soup.find_all("a", href=True)
+    file_links = [link["href"] for link in links if link["href"].endswith(".json.gz")]
+
+    file_links = file_links[:file_limit]
+
+    for file_name in file_links:
+        file_url = base_url + file_name
+        save_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
+        print(f"Downloading {file_url}...")
+        file_response = requests.get(file_url, stream=True)
+        file_response.raise_for_status()
+        with open(save_path, "wb") as file:
+            for chunk in file_response.iter_content(chunk_size=8192):
+                file.write(chunk)
+        time.sleep(1)
+
+    return f"Downloaded {len(file_links)} files" 
     """
             s3_client.upload_file(
             os.path.abspath(os.path.join('./bdi_api/s4/', 'example.txt')),

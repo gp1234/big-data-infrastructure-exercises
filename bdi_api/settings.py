@@ -2,7 +2,6 @@ from os.path import dirname, join
 import os
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 import bdi_api
 
 PROJECT_DIR = dirname(dirname(bdi_api.__file__))
@@ -30,10 +29,14 @@ class Settings(BaseSettings):
     s3_bucket: str = Field(
         default= os.getenv("BDI_S3_BUCKET"),
         description="Call the api like `BDI_S3_BUCKET=yourbucket poetry run uvicorn...`",
-    ),
+    )
     prepared_file_name: str = Field(
         default="concated",
         description="File name of the processed data",
+    )
+    aws_dir: str = Field(
+        default=join(PROJECT_DIR, "aws_files"),
+        description="Directory to store the raw data in the s3 bucket",
     )
 
 
@@ -51,3 +54,9 @@ class Settings(BaseSettings):
     @property
     def prepared_dir(self) -> str:
         return join(self.local_dir, "prepared")
+    
+    @property
+    def raw_dir_1(self) -> str:
+        """Store inside all the raw jsons"""
+        return join(self.aws_dir, "raw")
+
