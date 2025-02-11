@@ -2,10 +2,17 @@ from typing import Annotated
 
 from fastapi import APIRouter, status
 from fastapi.params import Query
-
 from bdi_api.settings import Settings
+import boto3
+import os
 
 settings = Settings()
+s3_client = boto3.client('s3')
+
+FILE_DIRECTORY = os.path.abspath(os.path.dirname(__file__))
+RAW_DOWNLOAD_HISTORY = os.path.join(settings.raw_dir, "day=20231101")
+BASE_DIRECTORY = os.path.abspath(os.path.join(FILE_DIRECTORY, "..", "..", "data"))
+PREPARED_DIR = os.path.join(settings.prepared_dir, "concatened")
 
 s4 = APIRouter(
     responses={
@@ -40,6 +47,21 @@ def download_data(
     s3_bucket = settings.s3_bucket
     s3_prefix_path = "raw/day=20231101/"
     # TODO
+    """
+            s3_client.upload_file(
+            os.path.abspath(os.path.join('./bdi_api/s4/', 'example.txt')),
+            s3_bucket,
+            "test/example2.txt"
+        )
+    
+    
+    """
+    try:
+        print(settings)
+        return "File uploaded successfully"
+    except Exception as e:
+        return f"Error uploading file: {str(e)}"
+
 
     return "OK"
 

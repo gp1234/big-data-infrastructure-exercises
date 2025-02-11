@@ -1,5 +1,5 @@
 from os.path import dirname, join
-
+import os
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -28,13 +28,14 @@ class Settings(BaseSettings):
         description="For any other value set env variable 'BDI_LOCAL_DIR'",
     )
     s3_bucket: str = Field(
-        default="bdi-test",
+        default= os.getenv("BDI_S3_BUCKET"),
         description="Call the api like `BDI_S3_BUCKET=yourbucket poetry run uvicorn...`",
+    ),
+    prepared_file_name: str = Field(
+        default="concated",
+        description="File name of the processed data",
     )
-    s3_bucket_name : str = Field(
-        default="bdi-aircraft-gio-s3",
-        description="The S3 bucket name",
-    )
+
 
 
     telemetry: bool = False
