@@ -1,5 +1,6 @@
 from os.path import dirname, join
 import os
+import shutil
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import bdi_api
@@ -59,4 +60,14 @@ class Settings(BaseSettings):
     def raw_dir_1(self) -> str:
         """Store inside all the raw jsons"""
         return join(self.aws_dir, "raw")
+
+    @property
+    def ensure_directory(self):
+        """Ensures a directory exists, recreating it if necessary"""
+        def _ensure_dir(dir_path: str) -> str:
+            if os.path.exists(dir_path):
+                shutil.rmtree(dir_path)
+            os.makedirs(dir_path, exist_ok=True)
+            return dir_path
+        return _ensure_dir
 

@@ -114,7 +114,9 @@ def prepare_data() -> str:
     """
     # TODO
     output_file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
-
+    if not os.path.exists(RAW_DOWNLOAD_HISTORY) or len(os.listdir(RAW_DOWNLOAD_HISTORY)) == 0:
+        return "There are no files to be processsed"
+        
     if os.path.exists(PREPARED_DIR):
         for filename in os.listdir(PREPARED_DIR):
             file_path = os.path.join(PREPARED_DIR, filename)

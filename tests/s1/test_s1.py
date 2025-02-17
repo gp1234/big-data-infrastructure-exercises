@@ -1,11 +1,17 @@
 from fastapi.testclient import TestClient
 import os
 
+from bdi_api.settings import Settings
+
+settings = Settings()
+
+
 FILE_DIRECTORY = os.path.abspath(os.path.dirname(__file__))
+WEBSITE_URL = settings.source_url + "/2023/11/01/"
+RAW_DOWNLOAD_HISTORY = os.path.join(settings.raw_dir, "day=20231101")
 BASE_DIRECTORY = os.path.abspath(os.path.join(FILE_DIRECTORY, "..", "..", "data"))
 PREPARED_DIR = os.path.join(BASE_DIRECTORY, "concatened")
 PREPARED_FILE_NAME = "concated"
-
 
 class TestS1Student:
     """

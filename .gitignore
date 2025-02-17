@@ -26,7 +26,7 @@ archive.zip
 
 # vim temporary files
 *~
-.*.sw?
+.*.sw?3
 .cache
 
 # macOS
