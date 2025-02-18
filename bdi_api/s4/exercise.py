@@ -179,4 +179,3 @@ def prepare_data() -> str:
         json.dump(all_transformed_aircraft, f, indent=4)
 
     return "Files have been prepared"
-    return "OK"
