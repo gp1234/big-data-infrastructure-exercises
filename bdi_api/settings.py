@@ -35,10 +35,6 @@ class Settings(BaseSettings):
         default="concated",
         description="File name of the processed data",
     )
-    aws_dir: str = Field(
-        default=join(PROJECT_DIR, "aws_files"),
-        description="Directory to store the raw data in the s3 bucket",
-    )
 
 
 

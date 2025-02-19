@@ -17,8 +17,8 @@ FILE_DIRECTORY = os.path.abspath(os.path.dirname(__file__))
 WEBSITE_URL = settings.source_url + "/2023/11/01/"
 RAW_DOWNLOAD_HISTORY = os.path.join(settings.raw_dir, "day=20231101")
 BASE_DIRECTORY = os.path.abspath(os.path.join(FILE_DIRECTORY, "..", "..", "data"))
-PREPARED_DIR = os.path.join(BASE_DIRECTORY, "concatened")
-PREPARED_FILE_NAME = "concated"
+PREPARED_DIR = settings.prepared_dir
+PREPARED_FILE_NAME = settings.prepared_file_name
 
 def check_if_exists(dir_path):
     if os.path.exists(dir_path):

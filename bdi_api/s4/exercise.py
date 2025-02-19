@@ -1,5 +1,4 @@
 from typing import Annotated, Dict, List
-import shutil
 from fastapi import APIRouter, status, HTTPException
 from fastapi.params import Query
 from bdi_api.settings import Settings
@@ -17,7 +16,7 @@ s3_client = boto3.client('s3')
 
 
 
-RAW_DOWNLOAD_HISTORY = os.path.join(settings.raw_dir_1, "day=20231101")
+RAW_DOWNLOAD_HISTORY = os.path.join(settings.raw_dir, "day=20231101")
 
 s4 = APIRouter(
     responses={
@@ -107,7 +106,7 @@ def prepare_data() -> str:
     """
     # TODO
     s3_bucket = settings.s3_bucket
-    s3_prefix_path = "raw/day=20231101/"
+    s3_prefix_path = "data/raw/day=20231101/"
     try:
         response = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix=s3_prefix_path)
         if 'Contents' not in response:
@@ -129,8 +128,7 @@ def prepare_data() -> str:
 
     if not os.path.exists(settings.prepared_dir):
         os.makedirs(settings.prepared_dir)
-
-    output_file_path = os.path.join(settings.prepared_dir, "aircraft.json")
+    output_file_path = os.path.join(settings.prepared_dir, f"{settings.prepared_file_name}.json")
 
     all_transformed_aircraft = []
     for _index, file_name in enumerate(os.listdir(RAW_DOWNLOAD_HISTORY)):
