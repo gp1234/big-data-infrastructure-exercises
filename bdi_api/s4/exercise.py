@@ -6,6 +6,7 @@ import boto3
 import os
 import requests
 import time
+import shutil
 from bs4 import BeautifulSoup
 from io import BytesIO
 from starlette.responses import JSONResponse
@@ -14,7 +15,10 @@ import json
 settings = Settings()
 s3_client = boto3.client('s3')
 
-
+def check_if_exists(dir_path):
+    if os.path.exists(dir_path):
+        shutil.rmtree(dir_path)
+    os.makedirs(dir_path, exist_ok=True)
 
 RAW_DOWNLOAD_HISTORY = os.path.join(settings.raw_dir, "day=20231101")
 
@@ -44,11 +48,11 @@ def download_data(
 ) -> str:
     """Same as s1 but store to an aws s3 bucket taken from settings
     and inside the path `raw/day=20231101/`"""
-    
+
     base_url = settings.source_url + "/2023/11/01/"
     s3_bucket = settings.s3_bucket
     s3_prefix_path = "data/raw/day=20231101/"
-    
+    print("Hitting endpoint")
     try:
         try:
             objects = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix=s3_prefix_path)
@@ -89,12 +93,14 @@ def download_data(
                 failed_uploads.append({"file": file_name, "error": str(e)})
             time.sleep(1)
         
-        return "Ok"
-            
+    
+          
     except requests.RequestException as e:
         return "Failed to fetch data from source"
     except Exception as e:
         return "Internal server error"
+    
+    return f"Uploaded {len(file_links)} files"
 
 
 @s4.post("/aircraft/prepare")
@@ -105,6 +111,8 @@ def prepare_data() -> str:
     All the `/api/s1/aircraft/` endpoints should work as usual
     """
     # TODO
+    check_if_exists(settings.prepared_dir)
+    check_if_exists(RAW_DOWNLOAD_HISTORY)
     s3_bucket = settings.s3_bucket
     s3_prefix_path = "data/raw/day=20231101/"
     try:
@@ -113,8 +121,6 @@ def prepare_data() -> str:
             return "No data found in S3 bucket prefix"
     except Exception as e:
         return "No data found in S3 bucket prefix"
-    
-    os.makedirs(RAW_DOWNLOAD_HISTORY, exist_ok=True)
 
     for obj in response['Contents']:
         file_key = obj['Key']
@@ -126,16 +132,13 @@ def prepare_data() -> str:
         except Exception as e:
             print(f"Error downloading {file_key}: {str(e)}")
 
-    if not os.path.exists(settings.prepared_dir):
-        os.makedirs(settings.prepared_dir)
     output_file_path = os.path.join(settings.prepared_dir, f"{settings.prepared_file_name}.json")
-
+    
     all_transformed_aircraft = []
     for _index, file_name in enumerate(os.listdir(RAW_DOWNLOAD_HISTORY)):
         print(file_name)
-        if file_name.endswith(".json"):
+        if file_name.endswith(".json.gz"):
             file_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
-
             with open(file_path) as file:
                 data = json.load(file)
             if "aircraft" in data:

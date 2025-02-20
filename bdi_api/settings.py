@@ -28,7 +28,7 @@ class Settings(BaseSettings):
         description="For any other value set env variable 'BDI_LOCAL_DIR'",
     )
     s3_bucket: str = Field(
-        default= os.getenv("BDI_S3_BUCKET"),
+        default= os.getenv("BDI_S3_BUCKET", "Default"),
         description="Call the api like `BDI_S3_BUCKET=yourbucket poetry run uvicorn...`",
     )
     prepared_file_name: str = Field(

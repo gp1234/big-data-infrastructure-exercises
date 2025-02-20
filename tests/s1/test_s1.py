@@ -22,7 +22,6 @@ class TestS1Student:
 
     For more information on the library used, search `pytest` in your preferred search engine.
     """
-
     def test_first(self, client: TestClient) -> None:
         # Implement tests if you want
         with client as client:
@@ -39,7 +38,7 @@ class TestS1Student:
             response = client.post("/api/s1/aircraft/prepare")
             assert not response.is_error, "Error while preparing data"
             
-            prepared_file = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
+            prepared_file  = os.path.join(settings.prepared_dir, f"{settings.prepared_file_name}.json")
             assert os.path.exists(prepared_file), "Prepared file does not exist after processing"
 
     def test_aircraft_pagination(self, client: TestClient) -> None:
