@@ -1,8 +1,10 @@
-from os.path import dirname, join
 import os
 import shutil
+from os.path import dirname, join
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 import bdi_api
 
 PROJECT_DIR = dirname(dirname(bdi_api.__file__))
@@ -28,15 +30,13 @@ class Settings(BaseSettings):
         description="For any other value set env variable 'BDI_LOCAL_DIR'",
     )
     s3_bucket: str = Field(
-        default= os.getenv("BDI_S3_BUCKET", "Default"),
+        default=os.getenv("BDI_S3_BUCKET", "Default"),
         description="Call the api like `BDI_S3_BUCKET=yourbucket poetry run uvicorn...`",
     )
     prepared_file_name: str = Field(
         default="concated",
         description="File name of the processed data",
     )
-
-
 
     telemetry: bool = False
     telemetry_dsn: str = "http://project2_secret_token@uptrace:14317/2"
@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     @property
     def prepared_dir(self) -> str:
         return join(self.local_dir, "prepared")
-    
+
     @property
     def raw_dir_1(self) -> str:
         """Store inside all the raw jsons"""
@@ -60,10 +60,11 @@ class Settings(BaseSettings):
     @property
     def ensure_directory(self):
         """Ensures a directory exists, recreating it if necessary"""
+
         def _ensure_dir(dir_path: str) -> str:
             if os.path.exists(dir_path):
                 shutil.rmtree(dir_path)
             os.makedirs(dir_path, exist_ok=True)
             return dir_path
-        return _ensure_dir
 
+        return _ensure_dir

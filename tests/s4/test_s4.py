@@ -1,5 +1,6 @@
-from fastapi.testclient import TestClient
 import os
+
+from fastapi.testclient import TestClient
 
 from bdi_api.settings import Settings
 
@@ -47,6 +48,6 @@ class TestS4Student:
         with client as client:
             response = client.post("/api/s4/aircraft/prepare")
             assert not response.is_error, "Error while preparing data in s4"
-            
-            prepared_file  = os.path.join(settings.prepared_dir, f"{settings.prepared_file_name}.json")
+
+            prepared_file = os.path.join(settings.prepared_dir, f"{settings.prepared_file_name}.json")
             assert os.path.exists(prepared_file), "Prepared file does not exist after processing"

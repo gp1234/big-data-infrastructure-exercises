@@ -3,8 +3,8 @@ import os
 import shutil
 import time
 from typing import Annotated
-import requests
 
+import requests
 from bs4 import BeautifulSoup
 from fastapi import APIRouter, status
 from fastapi.params import Query
@@ -20,10 +20,12 @@ BASE_DIRECTORY = os.path.abspath(os.path.join(FILE_DIRECTORY, "..", "..", "data"
 PREPARED_DIR = settings.prepared_dir
 PREPARED_FILE_NAME = settings.prepared_file_name
 
+
 def check_if_exists(dir_path):
     if os.path.exists(dir_path):
         shutil.rmtree(dir_path)
     os.makedirs(dir_path, exist_ok=True)
+
 
 s1 = APIRouter(
     responses={
@@ -116,7 +118,7 @@ def prepare_data() -> str:
     output_file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
     if not os.path.exists(RAW_DOWNLOAD_HISTORY) or len(os.listdir(RAW_DOWNLOAD_HISTORY)) == 0:
         return "There are no files to be processsed"
-        
+
     if os.path.exists(PREPARED_DIR):
         for filename in os.listdir(PREPARED_DIR):
             file_path = os.path.join(PREPARED_DIR, filename)
@@ -154,10 +156,9 @@ def prepare_data() -> str:
                         "max_alt_baro": entry.get("max_alt", ""),
                         "max_ground_speed": entry.get("gs", ""),
                         "had_emergency": (
-                            entry.get("emergency", "").lower() != "none"
-                            if entry.get("emergency") else False
+                            entry.get("emergency", "").lower() != "none" if entry.get("emergency") else False
                         ),
-                        "file_name": file_name
+                        "file_name": file_name,
                     }
                     for entry in aircraft_data
                 ]
@@ -175,7 +176,7 @@ def prepare_data() -> str:
         {"icao": key, "traces": [{k: v for k, v in trace.items() if k != "icao"} for trace in value]}
         for key, value in grouped_aircraft.items()
     ]
-    with open(output_file_path, 'w') as f:
+    with open(output_file_path, "w") as f:
         json.dump(all_transformed_aircraft, f, indent=4)
 
     return "Files have been prepared"
@@ -209,8 +210,8 @@ def list_aircraft(num_results: int = 100, page: int = 0) -> list[dict]:
     return [
         {
             "icao": airplaine.get("icao", ""),
-            "registration": airplaine.get("traces", [{}])[0].get("registration", None) ,
-            "type": airplaine.get("traces", [{}])[0].get("type", None) ,
+            "registration": airplaine.get("traces", [{}])[0].get("registration", None),
+            "type": airplaine.get("traces", [{}])[0].get("type", None),
         }
         for airplaine in data
     ]
@@ -233,9 +234,8 @@ def get_aircraft_position(icao: str, num_results: int = 1000, page: int = 0) -> 
     if not aircraft:
         return []
 
-
     traces = aircraft.get("traces", [])
-    traces.sort(key=lambda x: float(x.get("timestamp")) if x.get("timestamp") else float('inf'))
+    traces.sort(key=lambda x: float(x.get("timestamp")) if x.get("timestamp") else float("inf"))
 
     start_index = page * num_results
     end_index = start_index + num_results
@@ -265,12 +265,16 @@ def get_aircraft_statistics(icao: str) -> dict:
     with open(file_path) as file:
         data = json.load(file)
 
-
     positions = next((item for item in data if item["icao"] == icao), None)
     if not positions:
         return []
     return {
-        "max_altitude_baro": max(float(pos.get("max_alt_baro")) if pos.get("max_alt_baro") else 0 for pos in positions.get("traces", [])),
-        "max_ground_speed": max(float(pos.get("max_ground_speed")) if pos.get("max_ground_speed") else 0 for pos in positions.get("traces", [])),
+        "max_altitude_baro": max(
+            float(pos.get("max_alt_baro")) if pos.get("max_alt_baro") else 0 for pos in positions.get("traces", [])
+        ),
+        "max_ground_speed": max(
+            float(pos.get("max_ground_speed")) if pos.get("max_ground_speed") else 0
+            for pos in positions.get("traces", [])
+        ),
         "had_emergency": any(pos.get("had_emergency", False) for pos in positions.get("traces", [])),
     }

@@ -1,6 +1,6 @@
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import uptrace
 from fastapi import FastAPI
@@ -83,7 +83,7 @@ async def get_version() -> dict:
 def main() -> None:
     import uvicorn
 
-    uvicorn.run('bdi_api.app:app', host="0.0.0.0", port=8080, proxy_headers=True, access_log=False, reload=True)
+    uvicorn.run("bdi_api.app:app", host="0.0.0.0", port=8080, proxy_headers=True, access_log=False, reload=True)
 
 
 if __name__ == "__main__":
