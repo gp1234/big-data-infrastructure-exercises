@@ -17,11 +17,6 @@ settings = Settings()
 s3_client = boto3.client("s3")
 
 
-def check_if_exists(dir_path):
-    if os.path.exists(dir_path):
-        shutil.rmtree(dir_path)
-    os.makedirs(dir_path, exist_ok=True)
-
 
 RAW_DOWNLOAD_HISTORY = os.path.join(settings.raw_dir, "day=20231101")
 
@@ -55,7 +50,7 @@ def download_data(
     base_url = settings.source_url + "/2023/11/01/"
     s3_bucket = settings.s3_bucket
     s3_prefix_path = "data/raw/day=20231101/"
-    print("Hitting endpoint")
+
     try:
         try:
             objects = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix=s3_prefix_path)
@@ -108,8 +103,8 @@ def prepare_data() -> str:
     All the `/api/s1/aircraft/` endpoints should work as usual
     """
     # TODO
-    check_if_exists(settings.prepared_dir)
-    check_if_exists(RAW_DOWNLOAD_HISTORY)
+    settings.ensure_directory(settings.prepared_dir)
+    settings.ensure_directory(RAW_DOWNLOAD_HISTORY)
     s3_bucket = settings.s3_bucket
     s3_prefix_path = "data/raw/day=20231101/"
     try:
@@ -118,7 +113,7 @@ def prepare_data() -> str:
             return "No data found in S3 bucket prefix"
     except Exception:
         return "No data found in S3 bucket prefix"
-
+    
     for obj in response["Contents"]:
         file_key = obj["Key"]
         file_name = os.path.basename(file_key)
@@ -133,7 +128,6 @@ def prepare_data() -> str:
 
     all_transformed_aircraft = []
     for _index, file_name in enumerate(os.listdir(RAW_DOWNLOAD_HISTORY)):
-        print(file_name)
         if file_name.endswith(".json.gz"):
             file_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
             with open(file_path) as file:

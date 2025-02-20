@@ -52,15 +52,14 @@ class Settings(BaseSettings):
     def prepared_dir(self) -> str:
         return join(self.local_dir, "prepared")
 
-    @property
-    def raw_dir_1(self) -> str:
-        """Store inside all the raw jsons"""
-        return join(self.aws_dir, "raw")
 
     @property
-    def ensure_directory(self):
-        """Ensures a directory exists, recreating it if necessary"""
-
+    def ensure_directory(self) -> callable:
+        """Ensures a directory exists, recreating it if necessary
+        
+        Returns:
+            callable: A function that ensures a directory exists
+        """
         def _ensure_dir(dir_path: str) -> str:
             if os.path.exists(dir_path):
                 shutil.rmtree(dir_path)

@@ -13,18 +13,8 @@ from bdi_api.settings import Settings
 
 settings = Settings()
 
-FILE_DIRECTORY = os.path.abspath(os.path.dirname(__file__))
 WEBSITE_URL = settings.source_url + "/2023/11/01/"
 RAW_DOWNLOAD_HISTORY = os.path.join(settings.raw_dir, "day=20231101")
-BASE_DIRECTORY = os.path.abspath(os.path.join(FILE_DIRECTORY, "..", "..", "data"))
-PREPARED_DIR = settings.prepared_dir
-PREPARED_FILE_NAME = settings.prepared_file_name
-
-
-def check_if_exists(dir_path):
-    if os.path.exists(dir_path):
-        shutil.rmtree(dir_path)
-    os.makedirs(dir_path, exist_ok=True)
 
 
 s1 = APIRouter(
@@ -69,8 +59,9 @@ def download_data(
     """
 
     # TODO Implement download
-    check_if_exists(RAW_DOWNLOAD_HISTORY)
-    check_if_exists(PREPARED_DIR)
+
+    settings.ensure_directory(RAW_DOWNLOAD_HISTORY)
+    settings.ensure_directory(settings.prepared_dir)
 
     response = requests.get(WEBSITE_URL)
     response.raise_for_status()
@@ -84,7 +75,7 @@ def download_data(
     for file_name in file_links:
         file_url = WEBSITE_URL + file_name
         save_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
-        print(f"Downloading {file_url}...")
+
         file_response = requests.get(file_url, stream=True)
         file_response.raise_for_status()
         with open(save_path, "wb") as file:
@@ -115,13 +106,13 @@ def prepare_data() -> str:
     Keep in mind that we are downloading a lot of small files, and some libraries might not work well with this!
     """
     # TODO
-    output_file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
+    output_file_path = os.path.join(settings.prepared_dir, f"{settings.prepared_file_name}.json")
     if not os.path.exists(RAW_DOWNLOAD_HISTORY) or len(os.listdir(RAW_DOWNLOAD_HISTORY)) == 0:
         return "There are no files to be processsed"
 
-    if os.path.exists(PREPARED_DIR):
-        for filename in os.listdir(PREPARED_DIR):
-            file_path = os.path.join(PREPARED_DIR, filename)
+    if os.path.exists(settings.prepared_dir):
+        for filename in os.listdir(settings.prepared_dir):
+            file_path = os.path.join(settings.prepared_dir, filename)
             if os.path.isfile(file_path) or os.path.islink(file_path):
                 os.unlink(file_path)
             elif os.path.isdir(file_path):
@@ -136,7 +127,6 @@ def prepare_data() -> str:
 
     all_transformed_aircraft = []
     for _index, file_name in enumerate(os.listdir(RAW_DOWNLOAD_HISTORY)):
-        print(file_name)
         if file_name.endswith(".json"):
             file_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
 
@@ -189,7 +179,7 @@ def list_aircraft(num_results: int = 100, page: int = 0) -> list[dict]:
     """
     # TODO
 
-    file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
+    file_path = os.path.join(settings.prepared_dir, f"{settings.prepared_file_name}.json")
     if not os.path.exists(file_path):
         return []
 
@@ -223,7 +213,7 @@ def get_aircraft_position(icao: str, num_results: int = 1000, page: int = 0) -> 
     If an aircraft is not found, return an empty list.
     """
     # TODO implement and return a list with dictionaries with those values.
-    file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
+    file_path = os.path.join(settings.prepared_dir, f"{settings.prepared_file_name}.json")
     if not os.path.exists(file_path):
         return []
 
@@ -258,7 +248,7 @@ def get_aircraft_statistics(icao: str) -> dict:
     * had_emergency
     """
     # TODO Gather and return the correct statistics for the requested aircraft
-    file_path = os.path.join(PREPARED_DIR, f"{PREPARED_FILE_NAME}.json")
+    file_path = os.path.join(settings.prepared_dir, f"{settings.prepared_file_name}.json")
     if not os.path.exists(file_path):
         return []
 
