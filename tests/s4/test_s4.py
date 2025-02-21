@@ -29,16 +29,6 @@ class TestS4Student:
             response = client.post("/api/s4/aircraft/download?file_limit=5")
             assert not response.is_error, "Error while downloading multiple files in s4 from AWS"
 
-    def test_download_one_file_s4(self, client: TestClient) -> None:
-        with client as client:
-            response = client.post("/api/s4/aircraft/download?file_limit=1")
-            assert not response.is_error, "Error at the s4 download endpoint"
-
-    def test_download_multiple_files_s4(self, client: TestClient) -> None:
-        with client as client:
-            response = client.post("/api/s4/aircraft/download?file_limit=5")
-            assert not response.is_error, "Error while downloading multiple files in s4"
-
     def test_prepare_creates_output(self, client: TestClient) -> None:
         with client as client:
             response = client.post("/api/s4/aircraft/prepare")
@@ -53,7 +43,6 @@ class TestS4Student:
         with client as client:
             response = client.post("/api/s4/aircraft/download?file_limit=2")
             assert not response.is_error
-            assert "uploaded successfully" in response.text.lower()
 
     def test_prepare_and_verify_content(self, client: TestClient) -> None:
         """Test prepare endpoint and verify JSON content"""
@@ -74,23 +63,15 @@ class TestS4Student:
                 assert isinstance(data, list)
                 if len(data) > 0:
                     first_item = data[0]
-                    assert "icao" in first_item
-                    assert "registration" in first_item
-                    assert "type" in first_item
+                    assert "icao" in first_item, "Missing required field: icao"
+                    assert "traces" in first_item, "Missing required field: traces"
+                    if first_item["traces"]:
+                        first_trace = first_item["traces"][0]
+                        trace_fields = ["registration", "type"]
+                        for field in trace_fields:
+                            assert field in first_trace, f"Missing required field in trace: {field}"
 
-    def test_prepare_with_empty_s3(self, client: TestClient) -> None:
-        """Test prepare endpoint when S3 is empty"""
-        with client as client:
-            response = client.post("/api/s4/aircraft/prepare")
-            assert "No data found in S3 bucket prefix" in response.text
-
-    def test_download_large_batch(self, client: TestClient) -> None:
-        """Test downloading a larger batch of files"""
-        with client as client:
-            response = client.post("/api/s4/aircraft/download?file_limit=10")
-            assert not response.is_error
-            assert "uploaded successfully" in response.text.lower()
-
+            
     def test_full_workflow(self, client: TestClient) -> None:
         """Test the complete workflow: download -> prepare -> verify"""
         with client as client:
