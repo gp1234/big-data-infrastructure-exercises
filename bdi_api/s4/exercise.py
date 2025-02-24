@@ -5,18 +5,16 @@ import time
 from io import BytesIO
 from typing import Annotated, Dict, List
 
+import asyncio
+import aiohttp
 import boto3
-import requests
 from bs4 import BeautifulSoup
-from fastapi import APIRouter, status
-from fastapi.params import Query
+from fastapi import APIRouter, status, Query
 
 from bdi_api.settings import Settings
 
 settings = Settings()
 s3_client = boto3.client("s3")
-
-
 
 RAW_DOWNLOAD_HISTORY = os.path.join(settings.raw_dir, "day=20231101")
 
@@ -29,9 +27,26 @@ s4 = APIRouter(
     tags=["s4"],
 )
 
+async def download_file(session, file_url, local_path):
+    try:
+        async with session.get(file_url) as response:
+            response.raise_for_status()
+            with open(local_path, 'wb') as f:
+                f.write(await response.read())
+            return True, None
+    except Exception as e:
+        return False, {"file": file_url, "error": str(e)}
+
+def upload_file_to_s3(local_path, s3_bucket, s3_key):
+    try:
+        with open(local_path, 'rb') as f:
+            s3_client.upload_fileobj(f, s3_bucket, s3_key)
+        return True, None
+    except Exception as e:
+        return False, {"file": local_path, "error": str(e)}
 
 @s4.post("/aircraft/download")
-def download_data(
+async def download_data(
     file_limit: Annotated[
         int,
         Query(
@@ -42,7 +57,7 @@ def download_data(
     go in ascending order in order to correctly obtain the results.
     I'll test with increasing number of files starting from 100.""",
         ),
-    ] = 2,
+    ] = 100,
 ) -> str:
     """Same as s1 but store to an aws s3 bucket taken from settings
     and inside the path `raw/day=20231101/`"""
@@ -52,47 +67,44 @@ def download_data(
     s3_prefix_path = "data/raw/day=20231101/"
 
     try:
-        try:
-            objects = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix=s3_prefix_path)
-            if "Contents" in objects:
-                delete_keys = {"Objects": [{"Key": obj["Key"]} for obj in objects["Contents"]]}
-                s3_client.delete_objects(Bucket=s3_bucket, Delete=delete_keys)
-        except Exception as e:
-            return f"Failed to clean old files on S3 {e}"
 
-        response = requests.get(base_url)
-        response.raise_for_status()
+        objects = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix=s3_prefix_path)
+        if "Contents" in objects:
+            delete_keys = {"Objects": [{"Key": obj["Key"]} for obj in objects["Contents"]]}
+            s3_client.delete_objects(Bucket=s3_bucket, Delete=delete_keys)
 
-        soup = BeautifulSoup(response.text, "lxml")
-        links = soup.find_all("a", href=True)
-        file_links = [link["href"] for link in links if link["href"].endswith(".json.gz")]
-        file_links = file_links[:file_limit]
+        async with aiohttp.ClientSession() as session:
+            response = await session.get(base_url)
+            response.raise_for_status()
+            soup = BeautifulSoup(await response.text(), "lxml")
+            links = soup.find_all("a", href=True)
+            file_links = [link["href"] for link in links if link["href"].endswith(".json.gz")]
+            file_links = file_links[:file_limit]
 
-        successful_uploads: List[str] = []
-        failed_uploads: List[Dict[str, str]] = []
+            tasks = []
+            for file_name in file_links:
+                file_url = base_url + file_name
+                local_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
+                tasks.append(download_file(session, file_url, local_path))
 
-        for file_name in file_links:
-            file_url = base_url + file_name
-            try:
-                file_response = requests.get(file_url, stream=True)
-                file_response.raise_for_status()
+            results = await asyncio.gather(*tasks)
+
+            successful_downloads = [file_links[i] for i, (success, _) in enumerate(results) if success]
+            failed_downloads = [result[1] for result in results if result[1]]
+
+            # Upload files to S3
+            upload_results = []
+            for file_name in successful_downloads:
+                local_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
                 s3_key = f"{s3_prefix_path}{file_name}"
+                upload_results.append(upload_file_to_s3(local_path, s3_bucket, s3_key))
 
-                file_content = BytesIO(file_response.content)
-
-                s3_client.upload_fileobj(file_content, s3_bucket, s3_key)
-                successful_uploads.append(file_name)
-
-            except Exception as e:
-                failed_uploads.append({"file": file_name, "error": str(e)})
-            time.sleep(1)
-
-    except requests.RequestException:
+    except aiohttp.ClientError:
         return "Failed to fetch data from source"
-    except Exception:
-        return "Internal server error"
+    except Exception as e:
+        return f"Internal server error: {e}"
 
-    return f"Uploaded {len(file_links)} files"
+    return f"Downloaded {len(successful_downloads)} files. "
 
 
 @s4.post("/aircraft/prepare")
@@ -102,7 +114,6 @@ def prepare_data() -> str:
 
     All the `/api/s1/aircraft/` endpoints should work as usual
     """
-    # TODO
     settings.ensure_directory(settings.prepared_dir)
     settings.ensure_directory(RAW_DOWNLOAD_HISTORY)
     s3_bucket = settings.s3_bucket
@@ -130,7 +141,7 @@ def prepare_data() -> str:
     for _index, file_name in enumerate(os.listdir(RAW_DOWNLOAD_HISTORY)):
         if file_name.endswith(".json.gz"):
             file_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
-            with open(file_path) as file:
+            with open(file_path, 'rt') as file:
                 data = json.load(file)
             if "aircraft" in data:
                 aircraft_data = data["aircraft"]
