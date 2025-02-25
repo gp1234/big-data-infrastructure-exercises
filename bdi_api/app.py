@@ -83,8 +83,8 @@ async def get_version() -> dict:
 def main() -> None:
     import uvicorn
     ## Dev
-    uvicorn.run("bdi_api.app:app", host="0.0.0.0", port=8080, proxy_headers=True, access_log=False, reload=True)
-    ##uvicorn.run(app, host="0.0.0.0", port=8080, proxy_headers=True, access_log=False)
+    ##uvicorn.run("bdi_api.app:app", host="0.0.0.0", port=8080, proxy_headers=True, access_log=False, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8080, proxy_headers=True, access_log=False)
 
 if __name__ == "__main__":
     main()
