@@ -4,9 +4,11 @@ import shutil
 import time
 from io import BytesIO
 from typing import Annotated, Dict, List
+from botocore.exceptions import BotoCoreError, ClientError  
+import aiohttp
+import io
 
 import asyncio
-import aiohttp
 import boto3
 from bs4 import BeautifulSoup
 from fastapi import APIRouter, status, Query
@@ -25,25 +27,34 @@ s4 = APIRouter(
     },
     prefix="/api/s4",
     tags=["s4"],
-)
+)    
+def delete_s3_objects(bucket: str, prefix: str):
+    paginator = s3_client.get_paginator("list_objects_v2")
+    page_iterator = paginator.paginate(Bucket=bucket, Prefix=prefix)
 
-async def download_file(session, file_url, local_path):
+    delete_keys = []
+    for page in page_iterator:
+        if "Contents" in page:
+            delete_keys.extend([{"Key": obj["Key"]} for obj in page["Contents"]])
+    
+    if delete_keys:
+        s3_client.delete_objects(Bucket=bucket, Delete={"Objects": delete_keys})
+
+
+async def stream_upload_to_s3(session: aiohttp.ClientSession, file_url: str, bucket: str, key: str) -> bool:
     try:
         async with session.get(file_url) as response:
             response.raise_for_status()
-            with open(local_path, 'wb') as f:
-                f.write(await response.read())
-            return True, None
-    except Exception as e:
-        return False, {"file": file_url, "error": str(e)}
+            
+            data = await response.read()
+            file_obj = io.BytesIO(data)
+            
+            s3_client.upload_fileobj(file_obj, bucket, key)
 
-def upload_file_to_s3(local_path, s3_bucket, s3_key):
-    try:
-        with open(local_path, 'rb') as f:
-            s3_client.upload_fileobj(f, s3_bucket, s3_key)
-        return True, None
+        return True
     except Exception as e:
-        return False, {"file": local_path, "error": str(e)}
+        print(f"Failed to upload {file_url} to S3: {e}")
+        return False
 
 @s4.post("/aircraft/download")
 async def download_data(
@@ -65,14 +76,9 @@ async def download_data(
     base_url = settings.source_url + "/2023/11/01/"
     s3_bucket = settings.s3_bucket
     s3_prefix_path = "data/raw/day=20231101/"
-
     try:
-
-        objects = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix=s3_prefix_path)
-        if "Contents" in objects:
-            delete_keys = {"Objects": [{"Key": obj["Key"]} for obj in objects["Contents"]]}
-            s3_client.delete_objects(Bucket=s3_bucket, Delete=delete_keys)
-
+        delete_s3_objects(s3_bucket, s3_prefix_path)
+        
         async with aiohttp.ClientSession() as session:
             response = await session.get(base_url)
             response.raise_for_status()
@@ -84,27 +90,21 @@ async def download_data(
             tasks = []
             for file_name in file_links:
                 file_url = base_url + file_name
-                local_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
-                tasks.append(download_file(session, file_url, local_path))
-
+                s3_key = f"{s3_prefix_path}{file_name}"
+                tasks.append(stream_upload_to_s3(session, file_url, s3_bucket, s3_key))
+            
             results = await asyncio.gather(*tasks)
 
-            successful_downloads = [file_links[i] for i, (success, _) in enumerate(results) if success]
-            failed_downloads = [result[1] for result in results if result[1]]
-
-            # Upload files to S3
-            upload_results = []
-            for file_name in successful_downloads:
-                local_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
-                s3_key = f"{s3_prefix_path}{file_name}"
-                upload_results.append(upload_file_to_s3(local_path, s3_bucket, s3_key))
-
-    except aiohttp.ClientError:
-        return "Failed to fetch data from source"
+            successful_uploads = [file_links[i] for i, success in enumerate(results) if success]
+            failed_uploads = [file_links[i] for i, success in enumerate(results) if not success]
+    
+    except (aiohttp.ClientError, BotoCoreError, ClientError) as e:
+        return f"Error: {str(e)}"
     except Exception as e:
         return f"Internal server error: {e}"
 
-    return f"Downloaded {len(successful_downloads)} files. "
+    return f"Successfully uploaded {len(successful_uploads)} files. Failed: {len(failed_uploads)}."
+
 
 
 @s4.post("/aircraft/prepare")
