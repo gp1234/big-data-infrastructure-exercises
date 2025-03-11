@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
+
 from bdi_api.s7.exercise import s7
-from bdi_api.settings import Settings
 
 client = TestClient(s7)
 

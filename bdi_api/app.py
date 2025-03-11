@@ -1,7 +1,7 @@
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-import os
 
 import uptrace
 from fastapi import FastAPI
@@ -85,7 +85,7 @@ async def get_version() -> dict:
 def main() -> None:
     import uvicorn
 
-    if os.getenv("ENVIRONMENT") != "production": 
+    if os.getenv("ENVIRONMENT") != "production":
         uvicorn.run("bdi_api.app:app", host="0.0.0.0", port=8080, proxy_headers=True, access_log=False, reload=True)
     else:
         uvicorn.run(app, host="0.0.0.0", port=8080, proxy_headers=True, access_log=False)

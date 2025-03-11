@@ -1,6 +1,8 @@
-import os
 import json
+import os
+
 from fastapi.testclient import TestClient
+
 from bdi_api.settings import Settings
 
 settings = Settings()
@@ -49,15 +51,15 @@ class TestS4Student:
         with client as client:
             # First ensure we have files in S3
             client.post("/api/s4/aircraft/download?file_limit=2")
-            
+
             # Then prepare the data
             response = client.post("/api/s4/aircraft/prepare")
             assert not response.is_error
-            
+
             # Verify the prepared file exists and has valid content
             prepared_file = os.path.join(settings.prepared_dir, f"{settings.prepared_file_name}.json")
             assert os.path.exists(prepared_file)
-            
+
             with open(prepared_file) as f:
                 data = json.load(f)
                 assert isinstance(data, list)
@@ -71,7 +73,7 @@ class TestS4Student:
                         for field in trace_fields:
                             assert field in first_trace, f"Missing required field in trace: {field}"
 
-            
+
     def test_full_workflow(self, client: TestClient) -> None:
         """Test the complete workflow: download -> prepare -> verify"""
         with client as client:

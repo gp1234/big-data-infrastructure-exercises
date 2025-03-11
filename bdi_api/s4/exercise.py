@@ -1,17 +1,14 @@
+import asyncio
+import io
 import json
 import os
-import shutil
-import time
-from io import BytesIO
-from typing import Annotated, Dict, List
-from botocore.exceptions import BotoCoreError, ClientError  
-import aiohttp
-import io
+from typing import Annotated
 
-import asyncio
+import aiohttp
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from bs4 import BeautifulSoup
-from fastapi import APIRouter, status, Query
+from fastapi import APIRouter, Query, status
 
 from bdi_api.settings import Settings
 
@@ -27,7 +24,7 @@ s4 = APIRouter(
     },
     prefix="/api/s4",
     tags=["s4"],
-)    
+)
 def delete_s3_objects(bucket: str, prefix: str):
     paginator = s3_client.get_paginator("list_objects_v2")
     page_iterator = paginator.paginate(Bucket=bucket, Prefix=prefix)
@@ -36,7 +33,7 @@ def delete_s3_objects(bucket: str, prefix: str):
     for page in page_iterator:
         if "Contents" in page:
             delete_keys.extend([{"Key": obj["Key"]} for obj in page["Contents"]])
-    
+
     if delete_keys:
         s3_client.delete_objects(Bucket=bucket, Delete={"Objects": delete_keys})
 
@@ -45,10 +42,10 @@ async def stream_upload_to_s3(session: aiohttp.ClientSession, file_url: str, buc
     try:
         async with session.get(file_url) as response:
             response.raise_for_status()
-            
+
             data = await response.read()
             file_obj = io.BytesIO(data)
-            
+
             s3_client.upload_fileobj(file_obj, bucket, key)
 
         return True
@@ -78,7 +75,7 @@ async def download_data(
     s3_prefix_path = "data/raw/day=20231101/"
     try:
         delete_s3_objects(s3_bucket, s3_prefix_path)
-        
+
         async with aiohttp.ClientSession() as session:
             response = await session.get(base_url)
             response.raise_for_status()
@@ -92,12 +89,12 @@ async def download_data(
                 file_url = base_url + file_name
                 s3_key = f"{s3_prefix_path}{file_name}"
                 tasks.append(stream_upload_to_s3(session, file_url, s3_bucket, s3_key))
-            
+
             results = await asyncio.gather(*tasks)
 
             successful_uploads = [file_links[i] for i, success in enumerate(results) if success]
             failed_uploads = [file_links[i] for i, success in enumerate(results) if not success]
-    
+
     except (aiohttp.ClientError, BotoCoreError, ClientError) as e:
         return f"Error: {str(e)}"
     except Exception as e:
@@ -124,7 +121,7 @@ def prepare_data() -> str:
             return "No data found in S3 bucket prefix"
     except Exception:
         return "No data found in S3 bucket prefix"
-    
+
     for obj in response["Contents"]:
         file_key = obj["Key"]
         file_name = os.path.basename(file_key)
@@ -141,7 +138,7 @@ def prepare_data() -> str:
     for _index, file_name in enumerate(os.listdir(RAW_DOWNLOAD_HISTORY)):
         if file_name.endswith(".json.gz"):
             file_path = os.path.join(RAW_DOWNLOAD_HISTORY, file_name)
-            with open(file_path, 'rt') as file:
+            with open(file_path) as file:
                 data = json.load(file)
             if "aircraft" in data:
                 aircraft_data = data["aircraft"]

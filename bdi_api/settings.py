@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 if os.getenv("ENVIRONMENT") != "production":
     from dotenv import load_dotenv
     load_dotenv()
-    
+
 import bdi_api
 
 PROJECT_DIR = dirname(dirname(bdi_api.__file__))
@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     @property
     def ensure_directory(self) -> callable:
         """Ensures a directory exists, recreating it if necessary
-        
+
         Returns:
             callable: A function that ensures a directory exists
         """

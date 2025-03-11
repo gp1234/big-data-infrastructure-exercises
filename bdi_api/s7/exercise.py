@@ -1,9 +1,10 @@
-from fastapi import APIRouter, status, HTTPException
-import boto3
-from io import BytesIO
-import os
 import json
+from io import BytesIO
+
+import boto3
 import psycopg2
+from fastapi import APIRouter, HTTPException, status
+
 from bdi_api.settings import DBCredentials, Settings
 
 settings = Settings()
@@ -47,7 +48,7 @@ def ensure_tables_exist(cursor):
 
 CREATE INDEX IF NOT EXISTS idx_traces_icao ON traces (icao);
     """)
-    
+
 def process_file(s3_bucket_name, file_key, s3_client, cursor):
     response = s3_client.get_object(Bucket=s3_bucket_name, Key=file_key)
     data = json.load(BytesIO(response["Body"].read()))
@@ -56,18 +57,19 @@ def process_file(s3_bucket_name, file_key, s3_client, cursor):
         icao = entry.get("hex")
 
         cursor.execute("""
-            INSERT INTO traces (icao, lat, lon, timestamp, max_alt_baro, max_ground_speed, had_emergency, registration, type)
+            INSERT INTO traces
+            (icao, lat, lon, timestamp, max_alt_baro, max_ground_speed, had_emergency, registration, type)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
         """, (
-            icao, 
-            entry.get("lat", 0.0) if isinstance(entry.get("lat"), (int, float)) else 0.0, 
-            entry.get("lon", 0.0) if isinstance(entry.get("lon"), (int, float)) else 0.0, 
-            entry.get("seen_pos", ""), 
-            entry.get("alt_baro", 0.0) if isinstance(entry.get("alt_baro"), ( float)) else 0.0, 
-            entry.get("gs", 0.0) if isinstance(entry.get("gs"), ( float)) else 0.0, 
+            icao,
+            entry.get("lat", 0.0) if isinstance(entry.get("lat"), (int, float)) else 0.0,
+            entry.get("lon", 0.0) if isinstance(entry.get("lon"), (int, float)) else 0.0,
+            entry.get("seen_pos", ""),
+            entry.get("alt_baro", 0.0) if isinstance(entry.get("alt_baro"), ( float)) else 0.0,
+            entry.get("gs", 0.0) if isinstance(entry.get("gs"), ( float)) else 0.0,
             entry.get("alert") == 1,
-            entry.get("r", None), 
-            entry.get("t", None)  
+            entry.get("r", None),
+            entry.get("t", None)
         ))
 
 @s7.post("/aircraft/prepare")
@@ -96,7 +98,10 @@ def prepare_data() -> str:
         cur.close()
         conn.close()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Error downloading data"
+        ) from e
     return "Ok"
 
 
@@ -125,8 +130,11 @@ def list_aircraft(num_results: int = 100, page: int = 0) -> list[dict]:
         else:
             return [{}]
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Error downloading data")
-    
+        raise HTTPException(
+            status_code=500,
+            detail="Error retrieving data"
+        ) from e
+
 
 @s7.get("/aircraft/{icao}/positions")
 def get_aircraft_position(icao: str, num_results: int = 1000, page: int = 0) -> list[dict]:
@@ -138,7 +146,7 @@ def get_aircraft_position(icao: str, num_results: int = 1000, page: int = 0) -> 
     # TODO
     try:
         conn, cur = get_connections()
-        
+
         offset = page * num_results
         cur.execute("""
             SELECT timestamp, lat, lon
@@ -156,10 +164,13 @@ def get_aircraft_position(icao: str, num_results: int = 1000, page: int = 0) -> 
         else:
             return [{}]
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Error retrieving aircraft positions")
-    
+        raise HTTPException(
+            status_code=500,
+            detail="Error retrieving aircraft positions"
+        ) from e
 
-    
+
+
 @s7.get("/aircraft/{icao}/stats")
 def get_aircraft_statistics(icao: str) -> dict:
     """Returns different statistics about the aircraft
@@ -176,7 +187,7 @@ def get_aircraft_statistics(icao: str) -> dict:
     try:
         conn, cur = get_connections()
         cur.execute("""
-            SELECT 
+            SELECT
             MAX(max_alt_baro) AS max_altitude_baro,
             MAX(max_ground_speed) AS max_ground_speed,
             BOOL_OR(had_emergency) AS had_emergency
@@ -197,8 +208,10 @@ def get_aircraft_statistics(icao: str) -> dict:
         else:
             return {}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Error retrieving aircraft statistics"
+        ) from e
 
 
-    
-   
+
