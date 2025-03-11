@@ -38,3 +38,4 @@ archive.zip
 .report.json
 .pytest.json
 /aws_files
+.env

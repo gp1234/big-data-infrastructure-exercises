@@ -5,6 +5,10 @@ from os.path import dirname, join
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+if os.getenv("ENVIRONMENT") != "production":
+    from dotenv import load_dotenv
+    load_dotenv()
+    
 import bdi_api
 
 PROJECT_DIR = dirname(dirname(bdi_api.__file__))

@@ -7,7 +7,7 @@ import psycopg2
 from bdi_api.settings import DBCredentials, Settings
 
 settings = Settings()
-##db_credentials = DBCredentials()
+db_credentials = DBCredentials()
 BASE_URL = "https://samples.adsbexchange.com/readsb-hist/2023/11/01/"
 
 s7 = APIRouter(
@@ -21,11 +21,11 @@ s7 = APIRouter(
 
 def get_connections():
     conn = psycopg2.connect(
-    dbname="bts_infra",
-    user="bts",
-    password="bts",
-    host="localhost",
-    port="5432"
+    dbname=db_credentials.database,
+    user=db_credentials.username,
+    password=db_credentials.password,
+    host=db_credentials.host,
+    port=db_credentials.port
     )
     cur = conn.cursor()
     return conn, cur
@@ -76,7 +76,6 @@ def prepare_data() -> str:
 
     Use credentials passed from `db_credentials`
     """
-    ##user = db_credentials.username
     s3_bucket = settings.s3_bucket
     s3_prefix_path = "data/raw/day=20231101/"
     # TODO
@@ -161,9 +160,6 @@ def get_aircraft_position(icao: str, num_results: int = 1000, page: int = 0) -> 
     
 
     
-  
-
-
 @s7.get("/aircraft/{icao}/stats")
 def get_aircraft_statistics(icao: str) -> dict:
     """Returns different statistics about the aircraft

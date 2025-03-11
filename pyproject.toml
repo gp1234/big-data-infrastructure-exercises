@@ -35,6 +35,7 @@ asyncio = "^3.4.3"
 aiohttp = "^3.11.12"
 aiobotocore = "^2.21.1"
 psycopg2-binary = "^2.9.10"
+python-dotenv = "^1.0.1"
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^3.5.0"
