@@ -21,7 +21,7 @@ s7 = APIRouter(
 
 def get_connections():
     conn = psycopg2.connect(
-    dbname=db_credentials.database,
+    dbname=db_credentials.dbname,
     user=db_credentials.username,
     password=db_credentials.password,
     host=db_credentials.host,

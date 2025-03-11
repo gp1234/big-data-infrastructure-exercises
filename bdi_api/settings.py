@@ -16,7 +16,7 @@ PROJECT_DIR = dirname(dirname(bdi_api.__file__))
 
 class DBCredentials(BaseSettings):
     """Use env variables prefixed with BDI_DB_"""
-
+    dbname: str
     host: str
     port: int = 5432
     username: str
