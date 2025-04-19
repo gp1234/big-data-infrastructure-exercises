@@ -18,8 +18,8 @@ python = ">=3.9,<4.0"
 requests = "^2"
 fastapi = {extras = ["standard"], version = "^0.115.6"}
 uvicorn = "^0.24.0"
-pydantic = ">=2.0.1,<2.1.0"
-pydantic-settings = "2.0.3"
+pydantic = "^2"
+pydantic-settings = "^2"
 #boto3 = "^1.33.7"
 urllib3 = "<2"  # Needed to resolve botocore fast
 duckdb = "^1"

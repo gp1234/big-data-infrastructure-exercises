@@ -1,42 +1,129 @@
 import os
 import json
+import gzip
 from io import BytesIO
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
 import boto3
-from psycopg2 import pool
-from airflow import DAG
-from airflow.operators.python import PythonOperator
 import requests
 from bs4 import BeautifulSoup
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.models import Variable
+from psycopg2 import pool
 
-S3_BUCKET = os.environ["S3_BUCKET"]
-PG_HOST = os.environ["PG_HOST"]
-PG_PORT = os.environ.get("PG_PORT", 5432)
-PG_DBNAME = os.environ["PG_DBNAME"]
-PG_USER = os.environ["PG_USER"]
-PG_PASSWORD = os.environ["PG_PASSWORD"]
+def get_config(key, default=None):
+    return os.environ.get(key) or Variable.get(key, default_var=default)
 
-connection_pool = pool.ThreadedConnectionPool(
-    minconn=1,
-    maxconn=10,
-    dbname=PG_DBNAME,
-    user=PG_USER,
-    password=PG_PASSWORD,
-    host=PG_HOST,
-    port=PG_PORT
-)
+S3_BUCKET = get_config("S3_BUCKET", "bdi-aircraft-gio-s3")
+PG_HOST = get_config("PG_HOST", "localhost")
+PG_PORT = int(get_config("PG_PORT", "5437"))
+PG_DBNAME = get_config("PG_DBNAME", "postgres")
+PG_USER = get_config("PG_USER", "postgres")
+PG_PASSWORD = get_config("PG_PASSWORD", "postgres")
+
+def get_connection_pool():
+    return pool.ThreadedConnectionPool(
+        minconn=1,
+        maxconn=10,
+        dbname=PG_DBNAME,
+        user=PG_USER,
+        password=PG_PASSWORD,
+        host=PG_HOST,
+        port=PG_PORT
+    )
 
 @contextmanager
 def get_db_conn():
-    conn = connection_pool.getconn()
+    pool = get_connection_pool()
+    conn = pool.getconn()
     try:
         yield conn
     finally:
-        connection_pool.putconn(conn)
+        pool.putconn(conn)
 
-def ensure_traces_table():
+def download_files(**context):
+    execution_date = context["ds"]
+    date_obj = datetime.strptime(execution_date, "%Y-%m-%d")
+    if date_obj.day != 1:
+        print(f"Skipping {execution_date} — not 1st of the month")
+        return
+
+    base_url = f"https://samples.adsbexchange.com/readsb-hist/{date_obj.strftime('%Y/%m/%d')}/"
+    s3 = boto3.client("s3")
+    s3_prefix = f"raw/day={date_obj.strftime('%Y%m%d')}/"
+
+    response = requests.get(base_url)
+    if response.status_code != 200:
+        print(f"Failed to access {base_url}")
+        return
+
+    soup = BeautifulSoup(response.content, "html.parser")
+    links = [a["href"] for a in soup.find_all("a") if a["href"].endswith(".json.gz")]
+
+    for filename in links:
+        url = base_url + filename
+        try:
+            res = requests.get(url)
+            if res.status_code == 200:
+                s3.upload_fileobj(BytesIO(res.content), S3_BUCKET, s3_prefix + filename)
+        except Exception as e:
+            print(f"Error downloading/uploading {filename}: {e}")
+
+def prepare_files(**context):
+    execution_date = context["ds"]
+    date_obj = datetime.strptime(execution_date, "%Y-%m-%d")
+    if date_obj.day != 1:
+        print(f"Skipping {execution_date} — not 1st of the month")
+        return
+
+    s3 = boto3.client("s3")
+    raw_prefix = f"raw/day={date_obj.strftime('%Y%m%d')}/"
+    prepared_key = f"prepared/day={date_obj.strftime('%Y%m%d')}/grouped_aircraft.json"
+    tmp_raw_dir = "/tmp/raw_aircraft"
+    os.makedirs(tmp_raw_dir, exist_ok=True)
+
+    paginator = s3.get_paginator("list_objects_v2")
+    pages = paginator.paginate(Bucket=S3_BUCKET, Prefix=raw_prefix)
+
+    for page in pages:
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if not key.endswith(".json.gz"):
+                continue
+            raw_data = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
+            local_file_path = os.path.join(tmp_raw_dir, os.path.basename(key).replace(".gz", ""))
+            with open(local_file_path, "wb") as f:
+                f.write(gzip.decompress(raw_data))
+
+    all_transformed_aircraft = []
+    for file_name in os.listdir(tmp_raw_dir):
+        if file_name.endswith(".json"):
+            file_path = os.path.join(tmp_raw_dir, file_name)
+            with open(file_path) as file:
+                data = json.load(file)
+            if "aircraft" in data:
+                aircraft_data = data["aircraft"]
+                transformed = [
+                    {
+                        "icao": entry.get("hex", ""),
+                        "registration": entry.get("r", ""),
+                        "type": entry.get("t", ""),
+                        "lat": entry.get("lat", ""),
+                        "lon": entry.get("lon", ""),
+                        "timestamp": entry.get("seen_pos", ""),
+                        "max_alt_baro": entry.get("alt_baro", ""),
+                        "max_ground_speed": entry.get("gs", ""),
+                        "had_emergency": (
+                            entry.get("emergency", "").lower() != "none" if entry.get("emergency") else False
+                        ),
+                        "file_name": file_name,
+                    }
+                    for entry in aircraft_data
+                ]
+                all_transformed_aircraft.extend(transformed)
+
     with get_db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -50,93 +137,46 @@ def ensure_traces_table():
                     timestamp TEXT,
                     max_alt_baro NUMERIC,
                     max_ground_speed NUMERIC,
-                    had_emergency BOOLEAN DEFAULT FALSE
+                    had_emergency BOOLEAN,
+                    file_name TEXT
                 );
-                CREATE INDEX IF NOT EXISTS idx_traces_icao ON traces (icao);
-                CREATE INDEX IF NOT EXISTS idx_traces_timestamp ON traces (timestamp);
-                CREATE INDEX IF NOT EXISTS idx_traces_alt_speed ON traces (max_alt_baro, max_ground_speed);
             """)
+            for row in all_transformed_aircraft:
+                cur.execute("""
+                    INSERT INTO traces (
+                        icao, registration, type, lat, lon,
+                        timestamp, max_alt_baro, max_ground_speed,
+                        had_emergency, file_name
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING;
+                """, (
+                    row["icao"],
+                    row["registration"],
+                    row["type"],
+                    row["lat"],
+                    row["lon"],
+                    row["timestamp"],
+                    row["max_alt_baro"],
+                    row["max_ground_speed"],
+                    row["had_emergency"],
+                    row["file_name"]
+                ))
             conn.commit()
 
-def download_files(**context):
-    execution_date = context["ds"]
-    date_obj = datetime.strptime(execution_date, "%Y-%m-%d")
+    grouped_aircraft = {}
+    for aircraft in all_transformed_aircraft:
+        icao = aircraft["icao"]
+        if icao not in grouped_aircraft:
+            grouped_aircraft[icao] = []
+        grouped_aircraft[icao].append({k: v for k, v in aircraft.items() if k != "icao"})
 
-    if date_obj.day != 1:
-        print(f"Skipping {execution_date} — not 1st of the month")
-        return
+    result = [{"icao": icao, "traces": traces} for icao, traces in grouped_aircraft.items()]
+    output_file_path = "/tmp/prepared_grouped.json"
+    with open(output_file_path, "w") as f:
+        json.dump(result, f, indent=2)
 
-    base_url = f"https://samples.adsbexchange.com/readsb-hist/{date_obj.strftime('%Y/%m/%d')}/"
-    s3_client = boto3.client("s3")
-    s3_prefix = f"raw/day={date_obj.strftime('%Y%m%d')}/"
-    response = requests.get(base_url)
-    if response.status_code != 200:
-        print(f"Failed to access {base_url}")
-
-    for i in range(100):
-        soup = BeautifulSoup(response.content, 'html.parser')
-        links = [a['href'] for a in soup.find_all('a') if a['href'].endswith('.json.gz')]
-        
-        if i >= len(links):
-            break
-            
-        filename = links[i]
-        url = base_url + filename
-        try:
-            response = boto3.client("s3")._endpoint.http_session.get(url)
-            if response.status_code == 200:
-                s3_key = s3_prefix + filename
-                s3_client.upload_fileobj(BytesIO(response.content), S3_BUCKET, s3_key)
-        except Exception as e:
-            print(f"Failed to download or upload {filename}: {e}")
-
-def prepare_files(**context):
-    execution_date = context["ds"]
-    date_obj = datetime.strptime(execution_date, "%Y-%m-%d")
-
-    if date_obj.day != 1:
-        print(f"Skipping {execution_date} — not 1st of the month")
-        return
-
-    s3_client = boto3.client("s3")
-    prefix = f"raw/day={date_obj.strftime('%Y%m%d')}/"
-
-    paginator = s3_client.get_paginator("list_objects_v2")
-    page_iterator = paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix)
-
-    ensure_traces_table()
-    
-    with get_db_conn() as conn:
-        with conn.cursor() as cur:
-            for page in page_iterator:
-                for obj in page.get("Contents", []):
-                    key = obj["Key"]
-                    try:
-                        response = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
-                        data = json.load(BytesIO(response["Body"].read()))
-
-                        for entry in data.get("aircraft", []):
-                            icao = entry.get("hex")
-                            cur.execute("""
-                                INSERT INTO traces
-                                (icao, lat, lon, timestamp, max_alt_baro, max_ground_speed, had_emergency, registration, type)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                ON CONFLICT DO NOTHING;
-                            """, (
-                                icao,
-                                entry.get("lat", 0.0) if isinstance(entry.get("lat"), (int, float)) else 0.0,
-                                entry.get("lon", 0.0) if isinstance(entry.get("lon"), (int, float)) else 0.0,
-                                entry.get("seen_pos", ""),
-                                entry.get("alt_baro", 0.0) if isinstance(entry.get("alt_baro"), float) else 0.0,
-                                entry.get("gs", 0.0) if isinstance(entry.get("gs"), float) else 0.0,
-                                entry.get("alert") == 1,
-                                entry.get("r", None),
-                                entry.get("t", None)
-                            ))
-                    except Exception as e:
-                        print(f"Error processing {key}: {e}")
-
-            conn.commit()
+    s3.upload_file(output_file_path, S3_BUCKET, prepared_key)
+    print("Prepared file uploaded and DB insert complete.")
 
 default_args = {
     "owner": "airflow",
@@ -148,13 +188,13 @@ default_args = {
 with DAG(
     dag_id="readsb_hist_etl",
     default_args=default_args,
-    description="Download and prepare readsb-hist (split + idempotent)",
+    description="ETL for ADS-B readsb-hist: download raw → prepare → store & insert",
     schedule_interval="@daily",
     start_date=datetime(2023, 11, 1),
     end_date=datetime(2024, 11, 1),
     catchup=True,
     max_active_runs=1,
-    tags=["readsb", "etl", "s8", "aviation"],
+    tags=["readsb", "etl", "aviation"],
 ) as dag:
 
     download_task = PythonOperator(

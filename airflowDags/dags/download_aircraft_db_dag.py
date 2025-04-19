@@ -1,0 +1,139 @@
+import os
+import json
+import gzip
+from io import BytesIO
+from datetime import datetime, timedelta
+from contextlib import contextmanager
+
+import boto3
+import requests
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.models import Variable
+from psycopg2 import pool
+
+def get_config(key, default=None):
+    return os.environ.get(key) or Variable.get(key, default_var=default)
+
+S3_BUCKET = get_config("S3_BUCKET", "bdi-aircraft-gio-s3")
+PG_HOST = get_config("PG_HOST", "localhost")
+PG_PORT = int(get_config("PG_PORT", "5437"))
+PG_DBNAME = get_config("PG_DBNAME", "postgres")
+PG_USER = get_config("PG_USER", "postgres")
+PG_PASSWORD = get_config("PG_PASSWORD", "postgres")
+
+def get_connection_pool():
+    return pool.ThreadedConnectionPool(
+        minconn=1,
+        maxconn=10,
+        dbname=PG_DBNAME,
+        user=PG_USER,
+        password=PG_PASSWORD,
+        host=PG_HOST,
+        port=PG_PORT
+    )
+
+@contextmanager
+def get_db_conn():
+    pool = get_connection_pool()
+    conn = pool.getconn()
+    try:
+        yield conn
+    finally:
+        pool.putconn(conn)
+
+def ensure_registry_table():
+    with get_db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS aircraft_registry (
+                    icao TEXT PRIMARY KEY,
+                    reg TEXT,
+                    icatype TEXT,
+                    year TEXT,
+                    manufacturer TEXT,
+                    model TEXT,
+                    ownop TEXT,
+                    faa_pia BOOLEAN,
+                    faa_ladd BOOLEAN,
+                    short_type TEXT,
+                    mil BOOLEAN
+                );
+            """)
+            conn.commit()
+
+def download_and_process_registry(**context):
+    url = "http://downloads.adsbexchange.com/downloads/basic-ac-db.json.gz"
+    execution_date = context["ds"]
+    s3_raw_key = f"raw/registry/{execution_date}/basic-ac-db.json.gz"
+    s3_prepared_key = f"prepared/registry/{execution_date}/aircraft_registry.json"
+
+    response = requests.get(url, stream=True)
+    response.raise_for_status()
+
+    raw_bytes = response.content
+    s3 = boto3.client("s3")
+    s3.upload_fileobj(BytesIO(raw_bytes), S3_BUCKET, s3_raw_key)
+
+    decompressed = gzip.decompress(raw_bytes)
+    data = json.loads(decompressed)
+
+    s3.put_object(Bucket=S3_BUCKET, Key=s3_prepared_key, Body=json.dumps(data, indent=2))
+
+    ensure_registry_table()
+    with get_db_conn() as conn:
+        with conn.cursor() as cur:
+            for row in data:
+                cur.execute("""
+                    INSERT INTO aircraft_registry (
+                        icao, reg, icatype, year, manufacturer,
+                        model, ownop, faa_pia, faa_ladd, short_type, mil
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (icao) DO UPDATE SET
+                        reg = EXCLUDED.reg,
+                        icatype = EXCLUDED.icatype,
+                        year = EXCLUDED.year,
+                        manufacturer = EXCLUDED.manufacturer,
+                        model = EXCLUDED.model,
+                        ownop = EXCLUDED.ownop,
+                        faa_pia = EXCLUDED.faa_pia,
+                        faa_ladd = EXCLUDED.faa_ladd,
+                        short_type = EXCLUDED.short_type,
+                        mil = EXCLUDED.mil;
+                """, (
+                    row.get("icao"),
+                    row.get("reg"),
+                    row.get("icatype"),
+                    row.get("year"),
+                    row.get("manufacturer"),
+                    row.get("model"),
+                    row.get("ownop"),
+                    row.get("faa_pia"),
+                    row.get("faa_ladd"),
+                    row.get("short_type"),
+                    row.get("mil")
+                ))
+            conn.commit()
+
+default_args = {
+    "owner": "airflow",
+    "depends_on_past": False,
+    "retries": 1,
+    "retry_delay": timedelta(minutes=2),
+}
+
+with DAG(
+    dag_id="download_aircraft_db_dag",
+    default_args=default_args,
+    schedule_interval="@daily",
+    start_date=datetime(2023, 11, 1),
+    catchup=True,
+    max_active_runs=1,
+    tags=["adsb", "aircraft", "registry", "etl"],
+) as dag:
+
+    process_registry = PythonOperator(
+        task_id="download_and_process_aircraft_registry",
+        python_callable=download_and_process_registry,
+        provide_context=True,
+    )
