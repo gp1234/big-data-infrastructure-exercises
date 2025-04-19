@@ -10,19 +10,15 @@ import requests
 from bs4 import BeautifulSoup
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.models import Variable
 from psycopg2 import pool
 
-def get_config(key, default=None):
-    return os.environ.get(key) or Variable.get(key, default_var=default)
+S3_BUCKET = os.getenv("BDI_S3_BUCKET", "bdi-aircraft-gio-s3")
+PG_HOST = os.getenv("BDI_DB_HOST", "localhost")
+PG_PORT = int(os.getenv("BDI_DB_PORT", "5432"))
+PG_DBNAME = os.getenv("BDI_DB_DBNAME", "postgres")
+PG_USER = os.getenv("BDI_DB_USERNAME", "postgres")
+PG_PASSWORD = os.getenv("BDI_DB_PASSWORD", "postgres")
 
-S3_BUCKET = get_config("BDI_S3_BUCKET", "bdi-aircraft-gio-s3")
-PG_HOST = get_config("BDI_DB_HOST", "localhost")
-PG_PORT = int(get_config("BDI_DB_PORT", "5437"))
-PG_DBNAME = get_config("BDI_DB_DBNAME", "postgres")
-PG_USER = get_config("BDI_DB_USERNAME", "postgres")
-PG_PASSWORD = get_config("BDI_DB_PASSWORD", "postgres")
-MAX_FILES = int(get_config("BDI_MAX_DOWNLOAD", 100))
 
 def get_connection_pool():
     return pool.ThreadedConnectionPool(
@@ -35,14 +31,16 @@ def get_connection_pool():
         port=PG_PORT
     )
 
+
 @contextmanager
 def get_db_conn():
-    pool = get_connection_pool()
-    conn = pool.getconn()
+    pool_conn = get_connection_pool()
+    conn = pool_conn.getconn()
     try:
         yield conn
     finally:
-        pool.putconn(conn)
+        pool_conn.putconn(conn)
+
 
 def download_files(**context):
     execution_date = context["ds"]
@@ -55,7 +53,6 @@ def download_files(**context):
     s3 = boto3.client("s3")
     s3_prefix = f"raw/day={date_obj.strftime('%Y%m%d')}/"
 
-    print(f"[START] Accessing: {base_url}")
     response = requests.get(base_url)
     if response.status_code != 200:
         print(f"[ERROR] Failed to access index page: {base_url}")
@@ -63,21 +60,25 @@ def download_files(**context):
 
     soup = BeautifulSoup(response.content, "html.parser")
     links = [a["href"] for a in soup.find_all("a") if a["href"].endswith(".json.gz")]
-    print(f"[FOUND] {len(links)} files in index. Processing up to {MAX_FILES}.")
+    print(f"[FOUND] {len(links)} files in index.")
 
-    for idx, filename in enumerate(links[:MAX_FILES]):
-        url = base_url + filename
-        print(f"[DOWNLOAD] {idx+1}/{min(len(links), MAX_FILES)} - {filename}")
+    for idx, filename in enumerate(links):
+        s3_key = s3_prefix + filename
         try:
-            res = requests.get(url)
-            if res.status_code == 200:
-                s3_key = s3_prefix + filename
-                s3.upload_fileobj(BytesIO(res.content), S3_BUCKET, s3_key)
-                print(f"[S3] Uploaded to s3://{S3_BUCKET}/{s3_key}")
-            else:
-                print(f"[WARN] Failed to fetch file: {url}")
-        except Exception as e:
-            print(f"[ERROR] Failed {filename}: {e}")
+            s3.head_object(Bucket=S3_BUCKET, Key=s3_key)
+            print(f"[SKIP] Already exists in S3: {s3_key}")
+            continue
+        except s3.exceptions.ClientError:
+            pass
+
+        url = base_url + filename
+        res = requests.get(url)
+        if res.status_code == 200:
+            s3.upload_fileobj(BytesIO(res.content), S3_BUCKET, s3_key)
+            print(f"[S3] Uploaded to s3://{S3_BUCKET}/{s3_key}")
+        else:
+            print(f"[WARN] Failed to fetch file: {url}")
+
 
 def prepare_files(**context):
     execution_date = context["ds"]
@@ -95,29 +96,22 @@ def prepare_files(**context):
     paginator = s3.get_paginator("list_objects_v2")
     pages = paginator.paginate(Bucket=S3_BUCKET, Prefix=raw_prefix)
 
-    print(f"[S3] Listing raw files from: {raw_prefix}")
-    file_count = 0
+    all_transformed_aircraft = []
     for page in pages:
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if not key.endswith(".json.gz"):
                 continue
-            file_count += 1
+
             raw_data = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
             local_file_path = os.path.join(tmp_raw_dir, os.path.basename(key).replace(".gz", ""))
             with open(local_file_path, "wb") as f:
                 f.write(gzip.decompress(raw_data))
-            print(f"[DECOMPRESS] {key} → {local_file_path}")
-    print(f"[INFO] Total raw files processed: {file_count}")
 
-    all_transformed_aircraft = []
-    for file_name in os.listdir(tmp_raw_dir):
-        if file_name.endswith(".json"):
-            file_path = os.path.join(tmp_raw_dir, file_name)
-            with open(file_path) as file:
-                data = json.load(file)
+            with open(local_file_path) as f:
+                data = json.load(f)
+
             if "aircraft" in data:
-                aircraft_data = data["aircraft"]
                 transformed = [
                     {
                         "icao": entry.get("hex", ""),
@@ -131,12 +125,11 @@ def prepare_files(**context):
                         "had_emergency": (
                             entry.get("emergency", "").lower() != "none" if entry.get("emergency") else False
                         ),
-                        "file_name": file_name,
+                        "file_name": os.path.basename(local_file_path),
                     }
-                    for entry in aircraft_data
+                    for entry in data["aircraft"]
                 ]
                 all_transformed_aircraft.extend(transformed)
-    print(f"[TRANSFORM] Total records prepared: {len(all_transformed_aircraft)}")
 
     with get_db_conn() as conn:
         with conn.cursor() as cur:
@@ -175,25 +168,24 @@ def prepare_files(**context):
                     row["had_emergency"],
                     row["file_name"]
                 ))
-                if idx % 500 == 0:
-                    print(f"[DB] Inserted {idx}/{len(all_transformed_aircraft)} rows...")
             conn.commit()
-            print(f"[DB] All {len(all_transformed_aircraft)} rows inserted.")
 
     grouped_aircraft = {}
     for aircraft in all_transformed_aircraft:
         icao = aircraft["icao"]
-        if icao not in grouped_aircraft:
-            grouped_aircraft[icao] = []
-        grouped_aircraft[icao].append({k: v for k, v in aircraft.items() if k != "icao"})
+        grouped_aircraft.setdefault(icao, []).append({k: v for k, v in aircraft.items() if k != "icao"})
 
-    result = [{"icao": icao, "traces": traces} for icao, traces in grouped_aircraft.items()]
     output_file_path = "/tmp/prepared_grouped.json"
     with open(output_file_path, "w") as f:
-        json.dump(result, f, indent=2)
+        json.dump(
+            [{"icao": icao, "traces": traces} for icao, traces in grouped_aircraft.items()],
+            f,
+            indent=2
+        )
 
     s3.upload_file(output_file_path, S3_BUCKET, prepared_key)
     print(f"[S3] Uploaded grouped JSON to: s3://{S3_BUCKET}/{prepared_key}")
+
 
 default_args = {
     "owner": "airflow",
@@ -217,13 +209,11 @@ with DAG(
     download_task = PythonOperator(
         task_id="download_readsb_files",
         python_callable=download_files,
-        provide_context=True,
     )
 
     prepare_task = PythonOperator(
         task_id="prepare_readsb_files",
         python_callable=prepare_files,
-        provide_context=True,
     )
 
     download_task >> prepare_task
