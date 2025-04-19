@@ -1,6 +1,5 @@
 import os
 import json
-import gzip
 from io import BytesIO
 from datetime import datetime, timedelta
 from contextlib import contextmanager
@@ -19,7 +18,6 @@ PG_DBNAME = os.getenv("BDI_DB_DBNAME", "postgres")
 PG_USER = os.getenv("BDI_DB_USERNAME", "postgres")
 PG_PASSWORD = os.getenv("BDI_DB_PASSWORD", "postgres")
 
-
 def get_connection_pool():
     return pool.ThreadedConnectionPool(
         minconn=1,
@@ -28,9 +26,8 @@ def get_connection_pool():
         user=PG_USER,
         password=PG_PASSWORD,
         host=PG_HOST,
-        port=PG_PORT
+        port=PG_PORT,
     )
-
 
 @contextmanager
 def get_db_conn():
@@ -41,12 +38,10 @@ def get_db_conn():
     finally:
         pool_conn.putconn(conn)
 
-
 def download_files(**context):
     execution_date = context["ds"]
     date_obj = datetime.strptime(execution_date, "%Y-%m-%d")
     if date_obj.day != 1:
-        print(f"[SKIP] {execution_date} is not the 1st of the month.")
         return
 
     base_url = f"https://samples.adsbexchange.com/readsb-hist/{date_obj.strftime('%Y/%m/%d')}/"
@@ -55,18 +50,18 @@ def download_files(**context):
 
     response = requests.get(base_url)
     if response.status_code != 200:
-        print(f"[ERROR] Failed to access index page: {base_url}")
+        print(f"[ERROR] Failed to access: {base_url}")
         return
 
     soup = BeautifulSoup(response.content, "html.parser")
     links = [a["href"] for a in soup.find_all("a") if a["href"].endswith(".json.gz")]
-    print(f"[FOUND] {len(links)} files in index.")
+    print(f"[FOUND] {len(links)} files")
 
-    for idx, filename in enumerate(links):
+    for filename in links:
         s3_key = s3_prefix + filename
         try:
             s3.head_object(Bucket=S3_BUCKET, Key=s3_key)
-            print(f"[SKIP] Already exists in S3: {s3_key}")
+            print(f"[SKIP] Exists: {s3_key}")
             continue
         except s3.exceptions.ClientError:
             pass
@@ -75,61 +70,60 @@ def download_files(**context):
         res = requests.get(url)
         if res.status_code == 200:
             s3.upload_fileobj(BytesIO(res.content), S3_BUCKET, s3_key)
-            print(f"[S3] Uploaded to s3://{S3_BUCKET}/{s3_key}")
+            print(f"[S3] Uploaded: {s3_key}")
         else:
-            print(f"[WARN] Failed to fetch file: {url}")
-
+            print(f"[WARN] Failed: {url}")
 
 def prepare_files(**context):
     execution_date = context["ds"]
     date_obj = datetime.strptime(execution_date, "%Y-%m-%d")
     if date_obj.day != 1:
-        print(f"[SKIP] {execution_date} is not the 1st of the month.")
         return
 
     s3 = boto3.client("s3")
-    raw_prefix = f"raw/day={date_obj.strftime('%Y%m%d')}/"
-    prepared_key = f"prepared/day={date_obj.strftime('%Y%m%d')}/grouped_aircraft.json"
-    tmp_raw_dir = "/tmp/raw_aircraft"
-    os.makedirs(tmp_raw_dir, exist_ok=True)
+    date_str = date_obj.strftime('%Y%m%d')
+    raw_prefix = f"raw/day={date_str}/"
+    prepared_key = f"prepared/day={date_str}/grouped_aircraft.json"
+
+    try:
+        s3.head_object(Bucket=S3_BUCKET, Key=prepared_key)
+        print(f"[SKIP] Prepared file exists: {prepared_key}")
+        return
+    except s3.exceptions.ClientError:
+        pass
+
+    tmp_dir = "/tmp/raw_aircraft"
+    os.makedirs(tmp_dir, exist_ok=True)
 
     paginator = s3.get_paginator("list_objects_v2")
     pages = paginator.paginate(Bucket=S3_BUCKET, Prefix=raw_prefix)
 
-    all_transformed_aircraft = []
+    all_aircraft = []
     for page in pages:
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if not key.endswith(".json.gz"):
                 continue
-
-            raw_data = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
-            local_file_path = os.path.join(tmp_raw_dir, os.path.basename(key).replace(".gz", ""))
-            with open(local_file_path, "wb") as f:
-                f.write(gzip.decompress(raw_data))
-
-            with open(local_file_path) as f:
-                data = json.load(f)
-
-            if "aircraft" in data:
-                transformed = [
-                    {
-                        "icao": entry.get("hex", ""),
-                        "registration": entry.get("r", ""),
-                        "type": entry.get("t", ""),
-                        "lat": entry.get("lat", ""),
-                        "lon": entry.get("lon", ""),
-                        "timestamp": entry.get("seen_pos", ""),
-                        "max_alt_baro": entry.get("alt_baro", ""),
-                        "max_ground_speed": entry.get("gs", ""),
-                        "had_emergency": (
-                            entry.get("emergency", "").lower() != "none" if entry.get("emergency") else False
-                        ),
-                        "file_name": os.path.basename(local_file_path),
-                    }
-                    for entry in data["aircraft"]
-                ]
-                all_transformed_aircraft.extend(transformed)
+            data = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
+            local_file = os.path.join(tmp_dir, os.path.basename(key).replace(".gz", ""))
+            with open(local_file, "wb") as f:
+                f.write(data)
+            with open(local_file) as f:
+                content = json.load(f)
+                if "aircraft" in content:
+                    for a in content["aircraft"]:
+                        all_aircraft.append({
+                            "icao": a.get("hex", ""),
+                            "registration": a.get("r", ""),
+                            "type": a.get("t", ""),
+                            "lat": a.get("lat", ""),
+                            "lon": a.get("lon", ""),
+                            "timestamp": a.get("seen_pos", ""),
+                            "max_alt_baro": a.get("alt_baro", ""),
+                            "max_ground_speed": a.get("gs", ""),
+                            "had_emergency": a.get("emergency", "").lower() != "none" if a.get("emergency") else False,
+                            "file_name": os.path.basename(local_file),
+                        })
 
     with get_db_conn() as conn:
         with conn.cursor() as cur:
@@ -148,7 +142,7 @@ def prepare_files(**context):
                     file_name TEXT
                 );
             """)
-            for idx, row in enumerate(all_transformed_aircraft):
+            for row in all_aircraft:
                 cur.execute("""
                     INSERT INTO traces (
                         icao, registration, type, lat, lon,
@@ -156,36 +150,18 @@ def prepare_files(**context):
                         had_emergency, file_name
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT DO NOTHING;
-                """, (
-                    row["icao"],
-                    row["registration"],
-                    row["type"],
-                    row["lat"],
-                    row["lon"],
-                    row["timestamp"],
-                    row["max_alt_baro"],
-                    row["max_ground_speed"],
-                    row["had_emergency"],
-                    row["file_name"]
-                ))
+                """, tuple(row.values()))
             conn.commit()
 
-    grouped_aircraft = {}
-    for aircraft in all_transformed_aircraft:
-        icao = aircraft["icao"]
-        grouped_aircraft.setdefault(icao, []).append({k: v for k, v in aircraft.items() if k != "icao"})
+    grouped = {}
+    for ac in all_aircraft:
+        grouped.setdefault(ac["icao"], []).append({k: v for k, v in ac.items() if k != "icao"})
 
-    output_file_path = "/tmp/prepared_grouped.json"
-    with open(output_file_path, "w") as f:
-        json.dump(
-            [{"icao": icao, "traces": traces} for icao, traces in grouped_aircraft.items()],
-            f,
-            indent=2
-        )
+    with open("/tmp/grouped_aircraft.json", "w") as f:
+        json.dump([{"icao": k, "traces": v} for k, v in grouped.items()], f, indent=2)
 
-    s3.upload_file(output_file_path, S3_BUCKET, prepared_key)
-    print(f"[S3] Uploaded grouped JSON to: s3://{S3_BUCKET}/{prepared_key}")
-
+    s3.upload_file("/tmp/grouped_aircraft.json", S3_BUCKET, prepared_key)
+    print(f"[S3] Uploaded grouped: {prepared_key}")
 
 default_args = {
     "owner": "airflow",
@@ -197,7 +173,7 @@ default_args = {
 with DAG(
     dag_id="readsb_hist_etl",
     default_args=default_args,
-    description="ETL for ADS-B readsb-hist: download raw → prepare → store & insert",
+    description="ETL for ADS-B readsb-hist",
     schedule="@monthly",
     start_date=datetime(2023, 11, 1),
     end_date=datetime(2024, 11, 1),
@@ -205,15 +181,12 @@ with DAG(
     max_active_runs=1,
     tags=["readsb", "etl", "aviation"],
 ) as dag:
-
-    download_task = PythonOperator(
+    download = PythonOperator(
         task_id="download_readsb_files",
         python_callable=download_files,
     )
-
-    prepare_task = PythonOperator(
+    prepare = PythonOperator(
         task_id="prepare_readsb_files",
         python_callable=prepare_files,
     )
-
-    download_task >> prepare_task
+    download >> prepare
