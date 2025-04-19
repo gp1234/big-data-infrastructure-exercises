@@ -16,6 +16,7 @@ from bdi_api.examples import v0_router
 from bdi_api.s1.exercise import s1
 from bdi_api.s4.exercise import s4
 from bdi_api.s7.exercise import s7
+from bdi_api.s8.exercise import s8
 from bdi_api.settings import Settings
 
 logger = logging.getLogger("uvicorn.error")

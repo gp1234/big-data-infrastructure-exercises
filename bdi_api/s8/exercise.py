@@ -1,7 +1,9 @@
 from typing import Optional
+
+import psycopg2
 from fastapi import APIRouter, status
 from pydantic import BaseModel
-import psycopg2
+
 from bdi_api.settings import DBCredentials, Settings
 
 settings = Settings()

@@ -22,6 +22,7 @@ PG_PORT = int(get_config("BDI_DB_PORT", "5437"))
 PG_DBNAME = get_config("BDI_DB_DBNAME", "postgres")
 PG_USER = get_config("BDI_DB_USERNAME", "postgres")
 PG_PASSWORD = get_config("BDI_DB_PASSWORD", "postgres")
+MAX_FILES = int(get_config("BDI_MAX_DOWNLOAD", 100))
 
 def get_connection_pool():
     return pool.ThreadedConnectionPool(
@@ -62,11 +63,11 @@ def download_files(**context):
 
     soup = BeautifulSoup(response.content, "html.parser")
     links = [a["href"] for a in soup.find_all("a") if a["href"].endswith(".json.gz")]
-    print(f"[FOUND] {len(links)} files in index.")
+    print(f"[FOUND] {len(links)} files in index. Processing up to {MAX_FILES}.")
 
-    for idx, filename in enumerate(links):
+    for idx, filename in enumerate(links[:MAX_FILES]):
         url = base_url + filename
-        print(f"[DOWNLOAD] {idx+1}/{len(links)} - {filename}")
+        print(f"[DOWNLOAD] {idx+1}/{min(len(links), MAX_FILES)} - {filename}")
         try:
             res = requests.get(url)
             if res.status_code == 200:
