@@ -9,14 +9,13 @@ import requests
 from psycopg2 import pool
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.models import Variable
 
 def get_config(key, default=None):
-    return os.environ.get(key) or Variable.get(key, default_var=default)
+    return os.environ.get(key, default)
 
 S3_BUCKET = get_config("BDI_S3_BUCKET", "bdi-aircraft-gio-s3")
 PG_HOST = get_config("BDI_DB_HOST", "localhost")
-PG_PORT = int(get_config("BDI_DB_PORT", "5437"))
+PG_PORT = int(get_config("BDI_DB_PORT", "5432"))
 PG_DBNAME = get_config("BDI_DB_DBNAME", "postgres")
 PG_USER = get_config("BDI_DB_USERNAME", "postgres")
 PG_PASSWORD = get_config("BDI_DB_PASSWORD", "postgres")
@@ -53,7 +52,6 @@ def ensure_fuel_table():
                     source TEXT
                 );
             """)
-            print("[DB] Table `aircraft_fuel_consumption` ensured.")
             conn.commit()
 
 def download_and_process_fuel_rates(**context):
@@ -62,13 +60,18 @@ def download_and_process_fuel_rates(**context):
     s3_raw_key = f"raw/fuel_rates/{execution_date}/aircraft_type_fuel.json"
     s3_prepared_key = f"prepared/fuel_rates/{execution_date}/aircraft_type_fuel_prepared.json"
 
-    print(f"[DOWNLOAD] Fetching fuel consumption data from: {url}")
+    s3 = boto3.client("s3")
+    try:
+        s3.head_object(Bucket=S3_BUCKET, Key=s3_prepared_key)
+        print(f"[SKIP] Already exists: s3://{S3_BUCKET}/{s3_prepared_key}")
+        return
+    except s3.exceptions.ClientError:
+        pass
+
     response = requests.get(url)
     response.raise_for_status()
     content = response.content
-    print(f"[DOWNLOAD] Downloaded {len(content)} bytes.")
 
-    s3 = boto3.client("s3")
     s3.put_object(Bucket=S3_BUCKET, Key=s3_raw_key, Body=content)
     print(f"[S3] Uploaded raw file to: s3://{S3_BUCKET}/{s3_raw_key}")
 
@@ -82,8 +85,6 @@ def download_and_process_fuel_rates(**context):
             "category": details.get("category"),
             "source": details.get("source")
         })
-
-    print(f"[TRANSFORM] Prepared {len(prepared_data)} records for upload.")
 
     s3.put_object(
         Bucket=S3_BUCKET,
@@ -113,11 +114,7 @@ def download_and_process_fuel_rates(**context):
                     row["category"],
                     row["source"]
                 ))
-                if idx % 10 == 0:
-                    print(f"[DB] Inserted {idx + 1}/{len(prepared_data)} rows...")
-
             conn.commit()
-            print(f"[DB] Committed all {len(prepared_data)} rows to PostgreSQL.")
 
 default_args = {
     "owner": "airflow",
