@@ -16,12 +16,12 @@ from psycopg2 import pool
 def get_config(key, default=None):
     return os.environ.get(key) or Variable.get(key, default_var=default)
 
-S3_BUCKET = get_config("S3_BUCKET", "bdi-aircraft-gio-s3")
-PG_HOST = get_config("PG_HOST", "localhost")
-PG_PORT = int(get_config("PG_PORT", "5437"))
-PG_DBNAME = get_config("PG_DBNAME", "postgres")
-PG_USER = get_config("PG_USER", "postgres")
-PG_PASSWORD = get_config("PG_PASSWORD", "postgres")
+S3_BUCKET = get_config("BDI_S3_BUCKET", "bdi-aircraft-gio-s3")
+PG_HOST = get_config("BDI_DB_HOST", "localhost")
+PG_PORT = int(get_config("BDI_DB_PORT", "5437"))
+PG_DBNAME = get_config("BDI_DB_DBNAME", "postgres")
+PG_USER = get_config("BDI_DB_USERNAME", "postgres")
+PG_PASSWORD = get_config("BDI_DB_PASSWORD", "postgres")
 
 def get_connection_pool():
     return pool.ThreadedConnectionPool(
@@ -47,35 +47,42 @@ def download_files(**context):
     execution_date = context["ds"]
     date_obj = datetime.strptime(execution_date, "%Y-%m-%d")
     if date_obj.day != 1:
-        print(f"Skipping {execution_date} — not 1st of the month")
+        print(f"[SKIP] {execution_date} is not the 1st of the month.")
         return
 
     base_url = f"https://samples.adsbexchange.com/readsb-hist/{date_obj.strftime('%Y/%m/%d')}/"
     s3 = boto3.client("s3")
     s3_prefix = f"raw/day={date_obj.strftime('%Y%m%d')}/"
 
+    print(f"[START] Accessing: {base_url}")
     response = requests.get(base_url)
     if response.status_code != 200:
-        print(f"Failed to access {base_url}")
+        print(f"[ERROR] Failed to access index page: {base_url}")
         return
 
     soup = BeautifulSoup(response.content, "html.parser")
     links = [a["href"] for a in soup.find_all("a") if a["href"].endswith(".json.gz")]
+    print(f"[FOUND] {len(links)} files in index.")
 
-    for filename in links:
+    for idx, filename in enumerate(links):
         url = base_url + filename
+        print(f"[DOWNLOAD] {idx+1}/{len(links)} - {filename}")
         try:
             res = requests.get(url)
             if res.status_code == 200:
-                s3.upload_fileobj(BytesIO(res.content), S3_BUCKET, s3_prefix + filename)
+                s3_key = s3_prefix + filename
+                s3.upload_fileobj(BytesIO(res.content), S3_BUCKET, s3_key)
+                print(f"[S3] Uploaded to s3://{S3_BUCKET}/{s3_key}")
+            else:
+                print(f"[WARN] Failed to fetch file: {url}")
         except Exception as e:
-            print(f"Error downloading/uploading {filename}: {e}")
+            print(f"[ERROR] Failed {filename}: {e}")
 
 def prepare_files(**context):
     execution_date = context["ds"]
     date_obj = datetime.strptime(execution_date, "%Y-%m-%d")
     if date_obj.day != 1:
-        print(f"Skipping {execution_date} — not 1st of the month")
+        print(f"[SKIP] {execution_date} is not the 1st of the month.")
         return
 
     s3 = boto3.client("s3")
@@ -87,15 +94,20 @@ def prepare_files(**context):
     paginator = s3.get_paginator("list_objects_v2")
     pages = paginator.paginate(Bucket=S3_BUCKET, Prefix=raw_prefix)
 
+    print(f"[S3] Listing raw files from: {raw_prefix}")
+    file_count = 0
     for page in pages:
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if not key.endswith(".json.gz"):
                 continue
+            file_count += 1
             raw_data = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
             local_file_path = os.path.join(tmp_raw_dir, os.path.basename(key).replace(".gz", ""))
             with open(local_file_path, "wb") as f:
                 f.write(gzip.decompress(raw_data))
+            print(f"[DECOMPRESS] {key} → {local_file_path}")
+    print(f"[INFO] Total raw files processed: {file_count}")
 
     all_transformed_aircraft = []
     for file_name in os.listdir(tmp_raw_dir):
@@ -123,6 +135,7 @@ def prepare_files(**context):
                     for entry in aircraft_data
                 ]
                 all_transformed_aircraft.extend(transformed)
+    print(f"[TRANSFORM] Total records prepared: {len(all_transformed_aircraft)}")
 
     with get_db_conn() as conn:
         with conn.cursor() as cur:
@@ -141,7 +154,7 @@ def prepare_files(**context):
                     file_name TEXT
                 );
             """)
-            for row in all_transformed_aircraft:
+            for idx, row in enumerate(all_transformed_aircraft):
                 cur.execute("""
                     INSERT INTO traces (
                         icao, registration, type, lat, lon,
@@ -161,7 +174,10 @@ def prepare_files(**context):
                     row["had_emergency"],
                     row["file_name"]
                 ))
+                if idx % 500 == 0:
+                    print(f"[DB] Inserted {idx}/{len(all_transformed_aircraft)} rows...")
             conn.commit()
+            print(f"[DB] All {len(all_transformed_aircraft)} rows inserted.")
 
     grouped_aircraft = {}
     for aircraft in all_transformed_aircraft:
@@ -176,7 +192,7 @@ def prepare_files(**context):
         json.dump(result, f, indent=2)
 
     s3.upload_file(output_file_path, S3_BUCKET, prepared_key)
-    print("Prepared file uploaded and DB insert complete.")
+    print(f"[S3] Uploaded grouped JSON to: s3://{S3_BUCKET}/{prepared_key}")
 
 default_args = {
     "owner": "airflow",
@@ -189,7 +205,7 @@ with DAG(
     dag_id="readsb_hist_etl",
     default_args=default_args,
     description="ETL for ADS-B readsb-hist: download raw → prepare → store & insert",
-    schedule_interval="@daily",
+    schedule="@monthly",
     start_date=datetime(2023, 11, 1),
     end_date=datetime(2024, 11, 1),
     catchup=True,

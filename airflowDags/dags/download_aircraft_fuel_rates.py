@@ -14,12 +14,12 @@ from airflow.models import Variable
 def get_config(key, default=None):
     return os.environ.get(key) or Variable.get(key, default_var=default)
 
-S3_BUCKET = get_config("S3_BUCKET", "bdi-aircraft-gio-s3")
-PG_HOST = get_config("PG_HOST", "localhost")
-PG_PORT = int(get_config("PG_PORT", "5437"))
-PG_DBNAME = get_config("PG_DBNAME", "postgres")
-PG_USER = get_config("PG_USER", "postgres")
-PG_PASSWORD = get_config("PG_PASSWORD", "postgres")
+S3_BUCKET = get_config("BDI_S3_BUCKET", "bdi-aircraft-gio-s3")
+PG_HOST = get_config("BDI_DB_HOST", "localhost")
+PG_PORT = int(get_config("BDI_DB_PORT", "5437"))
+PG_DBNAME = get_config("BDI_DB_DBNAME", "postgres")
+PG_USER = get_config("BDI_DB_USERNAME", "postgres")
+PG_PASSWORD = get_config("BDI_DB_PASSWORD", "postgres")
 
 def get_connection_pool():
     return pool.ThreadedConnectionPool(
@@ -53,6 +53,7 @@ def ensure_fuel_table():
                     source TEXT
                 );
             """)
+            print("[DB] Table `aircraft_fuel_consumption` ensured.")
             conn.commit()
 
 def download_and_process_fuel_rates(**context):
@@ -61,12 +62,15 @@ def download_and_process_fuel_rates(**context):
     s3_raw_key = f"raw/fuel_rates/{execution_date}/aircraft_type_fuel.json"
     s3_prepared_key = f"prepared/fuel_rates/{execution_date}/aircraft_type_fuel_prepared.json"
 
+    print(f"[DOWNLOAD] Fetching fuel consumption data from: {url}")
     response = requests.get(url)
     response.raise_for_status()
     content = response.content
+    print(f"[DOWNLOAD] Downloaded {len(content)} bytes.")
 
     s3 = boto3.client("s3")
     s3.put_object(Bucket=S3_BUCKET, Key=s3_raw_key, Body=content)
+    print(f"[S3] Uploaded raw file to: s3://{S3_BUCKET}/{s3_raw_key}")
 
     raw_data = json.loads(content)
     prepared_data = []
@@ -79,16 +83,19 @@ def download_and_process_fuel_rates(**context):
             "source": details.get("source")
         })
 
+    print(f"[TRANSFORM] Prepared {len(prepared_data)} records for upload.")
+
     s3.put_object(
         Bucket=S3_BUCKET,
         Key=s3_prepared_key,
-        Body=json.dumps(prepared_data)
+        Body=json.dumps(prepared_data, indent=2)
     )
+    print(f"[S3] Uploaded prepared file to: s3://{S3_BUCKET}/{s3_prepared_key}")
 
     ensure_fuel_table()
     with get_db_conn() as conn:
         with conn.cursor() as cur:
-            for row in prepared_data:
+            for idx, row in enumerate(prepared_data):
                 cur.execute("""
                     INSERT INTO aircraft_fuel_consumption (
                         aircraft_type, name, galph, category, source
@@ -106,7 +113,11 @@ def download_and_process_fuel_rates(**context):
                     row["category"],
                     row["source"]
                 ))
+                if idx % 10 == 0:
+                    print(f"[DB] Inserted {idx + 1}/{len(prepared_data)} rows...")
+
             conn.commit()
+            print(f"[DB] Committed all {len(prepared_data)} rows to PostgreSQL.")
 
 default_args = {
     "owner": "airflow",
@@ -118,7 +129,7 @@ default_args = {
 with DAG(
     dag_id="aircraft_fuel_consumption_dag",
     default_args=default_args,
-    schedule_interval="@monthly",
+    schedule="@monthly",
     start_date=datetime(2023, 11, 1),
     catchup=True,
     max_active_runs=1,
@@ -128,5 +139,4 @@ with DAG(
     task = PythonOperator(
         task_id="download_and_process_fuel_data",
         python_callable=download_and_process_fuel_rates,
-        provide_context=True,
     )

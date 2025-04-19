@@ -1,2 +1,6 @@
 project:
   name: airflowdags
+
+mounts:
+  - source: ~/.aws
+    target: /home/astro/.aws

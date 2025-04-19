@@ -15,12 +15,12 @@ from psycopg2 import pool
 def get_config(key, default=None):
     return os.environ.get(key) or Variable.get(key, default_var=default)
 
-S3_BUCKET = get_config("S3_BUCKET", "bdi-aircraft-gio-s3")
-PG_HOST = get_config("PG_HOST", "localhost")
-PG_PORT = int(get_config("PG_PORT", "5437"))
-PG_DBNAME = get_config("PG_DBNAME", "postgres")
-PG_USER = get_config("PG_USER", "postgres")
-PG_PASSWORD = get_config("PG_PASSWORD", "postgres")
+S3_BUCKET = get_config("BDI_S3_BUCKET", "bdi-aircraft-gio-s3")
+PG_HOST = get_config("BDI_DB_HOST", "localhost")
+PG_PORT = int(get_config("BDI_DB_PORT", "5437"))
+PG_DBNAME = get_config("BDI_DB_DBNAME", "postgres")
+PG_USER = get_config("BDI_DB_USERNAME", "postgres")
+PG_PASSWORD = get_config("BDI_DB_PASSWORD", "postgres")
 
 def get_connection_pool():
     return pool.ThreadedConnectionPool(
@@ -65,8 +65,9 @@ def ensure_registry_table():
 def download_and_process_registry(**context):
     url = "http://downloads.adsbexchange.com/downloads/basic-ac-db.json.gz"
     execution_date = context["ds"]
-    s3_raw_key = f"raw/registry/{execution_date}/basic-ac-db.json.gz"
-    s3_prepared_key = f"prepared/registry/{execution_date}/aircraft_registry.json"
+    date_str = execution_date.replace("-", "")
+    s3_raw_key = f"raw/registry/day={date_str}/basic-ac-db.json.gz"
+    s3_prepared_key = f"prepared/registry/day={date_str}/aircraft_registry.json"
 
     response = requests.get(url, stream=True)
     response.raise_for_status()
