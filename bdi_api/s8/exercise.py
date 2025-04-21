@@ -35,7 +35,7 @@ def list_aircraft(num_results: int = 100, page: int = 0) -> list[AircraftReturn]
         user=db_credentials.username,
         password=db_credentials.password,
     )
-    
+
     cur = conn.cursor()
 
     cur.execute("""
