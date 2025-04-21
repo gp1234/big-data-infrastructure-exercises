@@ -11,14 +11,12 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from psycopg2 import pool
 
-
 S3_BUCKET = os.getenv("BDI_S3_BUCKET", "bdi-aircraft-gio-s3")
 PG_HOST = os.getenv("BDI_DB_HOST", "localhost")
 PG_PORT = int(os.getenv("BDI_DB_PORT", "5432"))
 PG_DBNAME = os.getenv("BDI_DB_DBNAME", "postgres")
 PG_USER = os.getenv("BDI_DB_USERNAME", "postgres")
 PG_PASSWORD = os.getenv("BDI_DB_PASSWORD", "postgres")
-
 
 def get_connection_pool():
     return pool.ThreadedConnectionPool(
@@ -31,7 +29,6 @@ def get_connection_pool():
         port=PG_PORT,
     )
 
-
 @contextmanager
 def get_db_conn():
     pool_conn = get_connection_pool()
@@ -41,12 +38,10 @@ def get_db_conn():
     finally:
         pool_conn.putconn(conn)
 
-
 def download_files(**context):
     execution_date = context["ds"]
     date_obj = datetime.strptime(execution_date, "%Y-%m-%d")
     if date_obj.day != 1:
-        print(f"[SKIP] {execution_date} is not the 1st of the month.")
         return
 
     base_url = f"https://samples.adsbexchange.com/readsb-hist/{date_obj.strftime('%Y/%m/%d')}/"
@@ -55,18 +50,15 @@ def download_files(**context):
 
     response = requests.get(base_url)
     if response.status_code != 200:
-        print(f"[ERROR] Failed to access index page: {base_url}")
         return
 
     soup = BeautifulSoup(response.content, "html.parser")
     links = [a["href"] for a in soup.find_all("a") if a["href"].endswith(".json.gz")]
-    print(f"[FOUND] {len(links)} files in index.")
 
     for idx, filename in enumerate(links[:100]):
         s3_key = s3_prefix + filename
         try:
             s3.head_object(Bucket=S3_BUCKET, Key=s3_key)
-            print(f"[SKIP] Already exists in S3: {s3_key}")
             continue
         except s3.exceptions.ClientError:
             pass
@@ -75,16 +67,11 @@ def download_files(**context):
         res = requests.get(url)
         if res.status_code == 200:
             s3.upload_fileobj(BytesIO(res.content), S3_BUCKET, s3_key)
-            print(f"[S3] Uploaded to s3://{S3_BUCKET}/{s3_key}")
-        else:
-            print(f"[WARN] Failed to fetch file: {url}")
-
 
 def prepare_files(**context):
     execution_date = context["ds"]
     date_obj = datetime.strptime(execution_date, "%Y-%m-%d")
     if date_obj.day != 1:
-        print(f"[SKIP] {execution_date} is not the 1st of the month.")
         return
 
     s3 = boto3.client("s3")
@@ -104,17 +91,13 @@ def prepare_files(**context):
 
             try:
                 raw_data = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
-                local_file_path = os.path.join(tmp_raw_dir, os.path.basename(key).replace(".gz", ""))
-                with open(local_file_path, "wb") as f:
-                    f.write(raw_data)
-                with open(local_file_path) as f:
-                    data = json.load(f)
+                json_data = json.loads(raw_data.decode("utf-8"))
             except Exception as e:
                 print(f"[ERROR] Reading/parsing {key} failed: {e}")
                 continue
 
-            if "aircraft" in data:
-                for entry in data["aircraft"]:
+            if "aircraft" in json_data:
+                for entry in json_data["aircraft"]:
                     try:
                         all_transformed_aircraft.append({
                             "icao": entry.get("hex", ""),
@@ -123,10 +106,10 @@ def prepare_files(**context):
                             "lat": entry.get("lat") if isinstance(entry.get("lat"), (int, float)) else None,
                             "lon": entry.get("lon") if isinstance(entry.get("lon"), (int, float)) else None,
                             "timestamp": entry.get("seen_pos", ""),
-                            "max_alt_baro": float(entry["alt_baro"]) if str(entry.get("alt_baro", "")).replace('.', '', 1).isdigit() else None,
-                            "max_ground_speed": float(entry["gs"]) if str(entry.get("gs", "")).replace('.', '', 1).isdigit() else None,
+                            "max_alt_baro": float(entry["alt_baro"]) if isinstance(entry.get("alt_baro"), (int, float)) else None,
+                            "max_ground_speed": float(entry["gs"]) if isinstance(entry.get("gs"), (int, float)) else None,
                             "had_emergency": entry.get("emergency", "").lower() != "none" if entry.get("emergency") else False,
-                            "file_name": os.path.basename(local_file_path),
+                            "file_name": os.path.basename(key),
                         })
                     except Exception as e:
                         print(f"[WARN] Skipping malformed aircraft entry: {e}")
@@ -148,7 +131,7 @@ def prepare_files(**context):
                     file_name TEXT
                 );
             """)
-            for idx, row in enumerate(all_transformed_aircraft):
+            for row in all_transformed_aircraft:
                 cur.execute("""
                     INSERT INTO traces (
                         icao, registration, type, lat, lon,
@@ -179,8 +162,6 @@ def prepare_files(**context):
         json_bytes = BytesIO(json.dumps({"icao": icao, "traces": traces}, indent=2).encode("utf-8"))
         key = f"prepared/day={date_obj.strftime('%Y%m%d')}/icao={icao}/grouped.json"
         s3.upload_fileobj(json_bytes, S3_BUCKET, key)
-        print(f"[S3] Uploaded: {key}")
-
 
 default_args = {
     "owner": "airflow",
