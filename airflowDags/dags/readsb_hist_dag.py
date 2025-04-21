@@ -38,10 +38,28 @@ def get_db_conn():
     finally:
         pool_conn.putconn(conn)
 
+def ensure_tables_exist(cursor):
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS traces (
+        id SERIAL PRIMARY KEY,
+        icao TEXT NOT NULL,
+        registration TEXT NULL,
+        type TEXT NULL,
+        lat DOUBLE PRECISION NULL,
+        lon DOUBLE PRECISION NULL,
+        timestamp TEXT NULL,
+        max_alt_baro NUMERIC NULL,
+        max_ground_speed NUMERIC NULL,
+        had_emergency BOOLEAN DEFAULT FALSE
+    );
+    CREATE INDEX IF NOT EXISTS idx_traces_icao ON traces (icao);
+    """)
+
 def download_files(**context):
     execution_date = context["ds"]
     date_obj = datetime.strptime(execution_date, "%Y-%m-%d")
     if date_obj.day != 1:
+        print(f"[SKIP] {execution_date} is not the 1st of the month.")
         return
 
     base_url = f"https://samples.adsbexchange.com/readsb-hist/{date_obj.strftime('%Y/%m/%d')}/"
@@ -50,15 +68,18 @@ def download_files(**context):
 
     response = requests.get(base_url)
     if response.status_code != 200:
+        print(f"[ERROR] Failed to access index page: {base_url}")
         return
 
     soup = BeautifulSoup(response.content, "html.parser")
     links = [a["href"] for a in soup.find_all("a") if a["href"].endswith(".json.gz")]
+    print(f"[FOUND] {len(links)} files in index.")
 
     for idx, filename in enumerate(links[:100]):
         s3_key = s3_prefix + filename
         try:
             s3.head_object(Bucket=S3_BUCKET, Key=s3_key)
+            print(f"[SKIP] Already exists in S3: {s3_key}")
             continue
         except s3.exceptions.ClientError:
             pass
@@ -67,101 +88,70 @@ def download_files(**context):
         res = requests.get(url)
         if res.status_code == 200:
             s3.upload_fileobj(BytesIO(res.content), S3_BUCKET, s3_key)
+            print(f"[S3] Uploaded to s3://{S3_BUCKET}/{s3_key}")
+        else:
+            print(f"[WARN] Failed to fetch file: {url}")
 
 def prepare_files(**context):
     execution_date = context["ds"]
     date_obj = datetime.strptime(execution_date, "%Y-%m-%d")
     if date_obj.day != 1:
+        print(f"[SKIP] {execution_date} is not the 1st of the month.")
         return
 
     s3 = boto3.client("s3")
     raw_prefix = f"raw/day={date_obj.strftime('%Y%m%d')}/"
-    tmp_raw_dir = "/tmp/raw_aircraft"
-    os.makedirs(tmp_raw_dir, exist_ok=True)
-
     paginator = s3.get_paginator("list_objects_v2")
     pages = paginator.paginate(Bucket=S3_BUCKET, Prefix=raw_prefix)
 
-    all_transformed_aircraft = []
+    conn = get_connection_pool().getconn()
+    cur = conn.cursor()
+    ensure_tables_exist(cur)
+
+    inserted_rows = 0
     for page in pages:
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if not key.endswith(".json.gz"):
                 continue
+            print(f"[PROCESS] Reading {key}")
 
+            raw_data = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
             try:
-                raw_data = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
-                json_data = json.loads(raw_data.decode("utf-8"))
+                data = json.loads(raw_data)
             except Exception as e:
-                print(f"[ERROR] Reading/parsing {key} failed: {e}")
+                print(f"[ERROR] Failed to parse {key}: {e}")
                 continue
 
-            if "aircraft" in json_data:
-                for entry in json_data["aircraft"]:
-                    try:
-                        all_transformed_aircraft.append({
-                            "icao": entry.get("hex", ""),
-                            "registration": entry.get("r", ""),
-                            "type": entry.get("t", ""),
-                            "lat": entry.get("lat") if isinstance(entry.get("lat"), (int, float)) else None,
-                            "lon": entry.get("lon") if isinstance(entry.get("lon"), (int, float)) else None,
-                            "timestamp": entry.get("seen_pos", ""),
-                            "max_alt_baro": float(entry["alt_baro"]) if isinstance(entry.get("alt_baro"), (int, float)) else None,
-                            "max_ground_speed": float(entry["gs"]) if isinstance(entry.get("gs"), (int, float)) else None,
-                            "had_emergency": entry.get("emergency", "").lower() != "none" if entry.get("emergency") else False,
-                            "file_name": os.path.basename(key),
-                        })
-                    except Exception as e:
-                        print(f"[WARN] Skipping malformed aircraft entry: {e}")
+            for entry in data.get("aircraft", []):
+                icao = entry.get("hex")
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO traces
+                        (icao, lat, lon, timestamp, max_alt_baro, max_ground_speed, had_emergency, registration, type)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                        """,
+                        (
+                            icao,
+                            entry.get("lat", 0.0) if isinstance(entry.get("lat"), (int, float)) else 0.0,
+                            entry.get("lon", 0.0) if isinstance(entry.get("lon"), (int, float)) else 0.0,
+                            entry.get("seen_pos", ""),
+                            entry.get("alt_baro", 0.0) if isinstance(entry.get("alt_baro"), (float,)) else 0.0,
+                            entry.get("gs", 0.0) if isinstance(entry.get("gs"), (float,)) else 0.0,
+                            entry.get("alert") == 1,
+                            entry.get("r", None),
+                            entry.get("t", None)
+                        )
+                    )
+                    inserted_rows += 1
+                except Exception as e:
+                    print(f"[WARN] Skipping entry for {icao}: {e}")
 
-    with get_db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS traces (
-                    id SERIAL PRIMARY KEY,
-                    icao TEXT NOT NULL,
-                    registration TEXT,
-                    type TEXT,
-                    lat DOUBLE PRECISION,
-                    lon DOUBLE PRECISION,
-                    timestamp TEXT,
-                    max_alt_baro NUMERIC,
-                    max_ground_speed NUMERIC,
-                    had_emergency BOOLEAN,
-                    file_name TEXT
-                );
-            """)
-            for row in all_transformed_aircraft:
-                cur.execute("""
-                    INSERT INTO traces (
-                        icao, registration, type, lat, lon,
-                        timestamp, max_alt_baro, max_ground_speed,
-                        had_emergency, file_name
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT DO NOTHING;
-                """, (
-                    row["icao"],
-                    row["registration"],
-                    row["type"],
-                    row["lat"],
-                    row["lon"],
-                    row["timestamp"],
-                    row["max_alt_baro"],
-                    row["max_ground_speed"],
-                    row["had_emergency"],
-                    row["file_name"]
-                ))
-            conn.commit()
-
-    grouped_aircraft = {}
-    for aircraft in all_transformed_aircraft:
-        icao = aircraft["icao"]
-        grouped_aircraft.setdefault(icao, []).append({k: v for k, v in aircraft.items() if k != "icao"})
-
-    for icao, traces in grouped_aircraft.items():
-        json_bytes = BytesIO(json.dumps({"icao": icao, "traces": traces}, indent=2).encode("utf-8"))
-        key = f"prepared/day={date_obj.strftime('%Y%m%d')}/icao={icao}/grouped.json"
-        s3.upload_fileobj(json_bytes, S3_BUCKET, key)
+    conn.commit()
+    print(f"[DB] Total rows inserted: {inserted_rows}")
+    cur.close()
+    conn.close()
 
 default_args = {
     "owner": "airflow",
