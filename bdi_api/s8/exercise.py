@@ -31,10 +31,11 @@ def list_aircraft(num_results: int = 100, page: int = 0) -> list[AircraftReturn]
     conn = psycopg2.connect(
         host=db_credentials.host,
         port=db_credentials.port,
-        dbname=db_credentials.db,
-        user=db_credentials.user,
+        dbname=db_credentials.dbname,
+        user=db_credentials.username,
         password=db_credentials.password,
     )
+    
     cur = conn.cursor()
 
     cur.execute("""

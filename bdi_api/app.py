@@ -69,6 +69,7 @@ app.include_router(v0_router)
 app.include_router(s1)
 app.include_router(s4)
 app.include_router(s7)
+app.include_router(s8)
 
 
 @app.get("/health", status_code=200)
@@ -87,8 +88,8 @@ def main() -> None:
     import uvicorn
 
     if os.getenv("ENVIRONMENT") != "production":
-        uvicorn.run("bdi_api.app:app", host="0.0.0.0", port=8080, proxy_headers=True, access_log=False, reload=True)
+        uvicorn.run("bdi_api.app:app", host="0.0.0.0", port=8085, proxy_headers=True, access_log=False, reload=True)
     else:
-        uvicorn.run(app, host="0.0.0.0", port=8080, proxy_headers=True, access_log=False)
+        uvicorn.run(app, host="0.0.0.0", port=8085, proxy_headers=True, access_log=False)
 if __name__ == "__main__":
     main()

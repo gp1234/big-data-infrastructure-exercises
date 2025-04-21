@@ -9,18 +9,15 @@ import boto3
 import requests
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.models import Variable
 from psycopg2 import pool
 
-def get_config(key, default=None):
-    return os.environ.get(key) or Variable.get(key, default_var=default)
+S3_BUCKET = os.getenv("BDI_S3_BUCKET", "bdi-aircraft-gio-s3")
+PG_HOST = os.getenv("BDI_DB_HOST", "localhost")
+PG_PORT = int(os.getenv("BDI_DB_PORT", "5432"))
+PG_DBNAME = os.getenv("BDI_DB_DBNAME", "postgres")
+PG_USER = os.getenv("BDI_DB_USERNAME", "postgres")
+PG_PASSWORD = os.getenv("BDI_DB_PASSWORD", "postgres")
 
-S3_BUCKET = get_config("BDI_S3_BUCKET", "bdi-aircraft-gio-s3")
-PG_HOST = get_config("BDI_DB_HOST", "localhost")
-PG_PORT = int(get_config("BDI_DB_PORT", "5437"))
-PG_DBNAME = get_config("BDI_DB_DBNAME", "postgres")
-PG_USER = get_config("BDI_DB_USERNAME", "postgres")
-PG_PASSWORD = get_config("BDI_DB_PASSWORD", "postgres")
 
 def get_connection_pool():
     return pool.ThreadedConnectionPool(
@@ -30,22 +27,25 @@ def get_connection_pool():
         user=PG_USER,
         password=PG_PASSWORD,
         host=PG_HOST,
-        port=PG_PORT
+        port=PG_PORT,
     )
+
 
 @contextmanager
 def get_db_conn():
-    pool = get_connection_pool()
-    conn = pool.getconn()
+    pool_conn = get_connection_pool()
+    conn = pool_conn.getconn()
     try:
         yield conn
     finally:
-        pool.putconn(conn)
+        pool_conn.putconn(conn)
+
 
 def ensure_registry_table():
     with get_db_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS aircraft_registry (
                     icao TEXT PRIMARY KEY,
                     reg TEXT,
@@ -59,8 +59,10 @@ def ensure_registry_table():
                     short_type TEXT,
                     mil BOOLEAN
                 );
-            """)
+                """
+            )
             conn.commit()
+
 
 def download_and_process_registry(**context):
     url = "http://downloads.adsbexchange.com/downloads/basic-ac-db.json.gz"
@@ -69,23 +71,38 @@ def download_and_process_registry(**context):
     s3_raw_key = f"raw/registry/day={date_str}/basic-ac-db.json.gz"
     s3_prepared_key = f"prepared/registry/day={date_str}/aircraft_registry.json"
 
+    s3 = boto3.client("s3")
+
+    try:
+        s3.head_object(Bucket=S3_BUCKET, Key=s3_prepared_key)
+        print(f"[SKIP] Already exists: s3://{S3_BUCKET}/{s3_prepared_key}")
+        return
+    except s3.exceptions.ClientError:
+        pass
+
     response = requests.get(url, stream=True)
     response.raise_for_status()
-
     raw_bytes = response.content
-    s3 = boto3.client("s3")
+
     s3.upload_fileobj(BytesIO(raw_bytes), S3_BUCKET, s3_raw_key)
 
-    decompressed = gzip.decompress(raw_bytes)
-    data = json.loads(decompressed)
+    decompressed_data = gzip.decompress(raw_bytes).decode("utf-8")
+    lines = decompressed_data.strip().split("\n")
+    data = [json.loads(line) for line in lines]
 
-    s3.put_object(Bucket=S3_BUCKET, Key=s3_prepared_key, Body=json.dumps(data, indent=2))
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=s3_prepared_key,
+        Body=json.dumps(data, indent=2),
+    )
 
     ensure_registry_table()
+
     with get_db_conn() as conn:
         with conn.cursor() as cur:
             for row in data:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO aircraft_registry (
                         icao, reg, icatype, year, manufacturer,
                         model, ownop, faa_pia, faa_ladd, short_type, mil
@@ -101,20 +118,23 @@ def download_and_process_registry(**context):
                         faa_ladd = EXCLUDED.faa_ladd,
                         short_type = EXCLUDED.short_type,
                         mil = EXCLUDED.mil;
-                """, (
-                    row.get("icao"),
-                    row.get("reg"),
-                    row.get("icatype"),
-                    row.get("year"),
-                    row.get("manufacturer"),
-                    row.get("model"),
-                    row.get("ownop"),
-                    row.get("faa_pia"),
-                    row.get("faa_ladd"),
-                    row.get("short_type"),
-                    row.get("mil")
-                ))
+                    """,
+                    (
+                        row.get("icao"),
+                        row.get("reg"),
+                        row.get("icatype"),
+                        row.get("year"),
+                        row.get("manufacturer"),
+                        row.get("model"),
+                        row.get("ownop"),
+                        row.get("faa_pia"),
+                        row.get("faa_ladd"),
+                        row.get("short_type"),
+                        row.get("mil"),
+                    ),
+                )
             conn.commit()
+
 
 default_args = {
     "owner": "airflow",
@@ -132,9 +152,7 @@ with DAG(
     max_active_runs=1,
     tags=["adsb", "aircraft", "registry", "etl"],
 ) as dag:
-
     process_registry = PythonOperator(
         task_id="download_and_process_aircraft_registry",
         python_callable=download_and_process_registry,
-        provide_context=True,
     )
