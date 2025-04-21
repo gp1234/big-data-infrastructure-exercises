@@ -18,25 +18,23 @@ PG_DBNAME = os.getenv("BDI_DB_DBNAME", "postgres")
 PG_USER = os.getenv("BDI_DB_USERNAME", "postgres")
 PG_PASSWORD = os.getenv("BDI_DB_PASSWORD", "postgres")
 
-def get_connection_pool():
-    return pool.ThreadedConnectionPool(
-        minconn=1,
-        maxconn=10,
-        dbname=PG_DBNAME,
-        user=PG_USER,
-        password=PG_PASSWORD,
-        host=PG_HOST,
-        port=PG_PORT,
-    )
+CONN_POOL = pool.ThreadedConnectionPool(
+    minconn=1,
+    maxconn=10,
+    dbname=PG_DBNAME,
+    user=PG_USER,
+    password=PG_PASSWORD,
+    host=PG_HOST,
+    port=PG_PORT,
+)
 
 @contextmanager
 def get_db_conn():
-    pool_conn = get_connection_pool()
-    conn = pool_conn.getconn()
+    conn = CONN_POOL.getconn()
     try:
         yield conn
     finally:
-        pool_conn.putconn(conn)
+        CONN_POOL.putconn(conn)
 
 def ensure_tables_exist(cursor):
     cursor.execute("""
@@ -104,54 +102,52 @@ def prepare_files(**context):
     paginator = s3.get_paginator("list_objects_v2")
     pages = paginator.paginate(Bucket=S3_BUCKET, Prefix=raw_prefix)
 
-    conn = get_connection_pool().getconn()
-    cur = conn.cursor()
-    ensure_tables_exist(cur)
+    with get_db_conn() as conn:
+        with conn.cursor() as cur:
+            ensure_tables_exist(cur)
 
-    inserted_rows = 0
-    for page in pages:
-        for obj in page.get("Contents", []):
-            key = obj["Key"]
-            if not key.endswith(".json.gz"):
-                continue
-            print(f"[PROCESS] Reading {key}")
+            inserted_rows = 0
+            for page in pages:
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if not key.endswith(".json.gz"):
+                        continue
+                    print(f"[PROCESS] Reading {key}")
 
-            raw_data = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
-            try:
-                data = json.loads(raw_data)
-            except Exception as e:
-                print(f"[ERROR] Failed to parse {key}: {e}")
-                continue
+                    raw_data = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
+                    try:
+                        data = json.loads(raw_data)
+                    except Exception as e:
+                        print(f"[ERROR] Failed to parse {key}: {e}")
+                        continue
 
-            for entry in data.get("aircraft", []):
-                icao = entry.get("hex")
-                try:
-                    cur.execute(
-                        """
-                        INSERT INTO traces
-                        (icao, lat, lon, timestamp, max_alt_baro, max_ground_speed, had_emergency, registration, type)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-                        """,
-                        (
-                            icao,
-                            entry.get("lat", 0.0) if isinstance(entry.get("lat"), (int, float)) else 0.0,
-                            entry.get("lon", 0.0) if isinstance(entry.get("lon"), (int, float)) else 0.0,
-                            entry.get("seen_pos", ""),
-                            entry.get("alt_baro", 0.0) if isinstance(entry.get("alt_baro"), (float,)) else 0.0,
-                            entry.get("gs", 0.0) if isinstance(entry.get("gs"), (float,)) else 0.0,
-                            entry.get("alert") == 1,
-                            entry.get("r", None),
-                            entry.get("t", None)
-                        )
-                    )
-                    inserted_rows += 1
-                except Exception as e:
-                    print(f"[WARN] Skipping entry for {icao}: {e}")
+                    for entry in data.get("aircraft", []):
+                        icao = entry.get("hex")
+                        try:
+                            cur.execute(
+                                """
+                                INSERT INTO traces
+                                (icao, lat, lon, timestamp, max_alt_baro, max_ground_speed, had_emergency, registration, type)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                                """,
+                                (
+                                    icao,
+                                    entry.get("lat", 0.0) if isinstance(entry.get("lat"), (int, float)) else 0.0,
+                                    entry.get("lon", 0.0) if isinstance(entry.get("lon"), (int, float)) else 0.0,
+                                    entry.get("seen_pos", ""),
+                                    entry.get("alt_baro", 0.0) if isinstance(entry.get("alt_baro"), (float,)) else 0.0,
+                                    entry.get("gs", 0.0) if isinstance(entry.get("gs"), (float,)) else 0.0,
+                                    entry.get("alert") == 1,
+                                    entry.get("r", None),
+                                    entry.get("t", None)
+                                )
+                            )
+                            inserted_rows += 1
+                        except Exception as e:
+                            print(f"[WARN] Skipping entry for {icao}: {e}")
 
-    conn.commit()
-    print(f"[DB] Total rows inserted: {inserted_rows}")
-    cur.close()
-    conn.close()
+            conn.commit()
+            print(f"[DB] Total rows inserted: {inserted_rows}")
 
 default_args = {
     "owner": "airflow",
