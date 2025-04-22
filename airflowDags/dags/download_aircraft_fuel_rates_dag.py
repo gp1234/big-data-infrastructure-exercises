@@ -10,7 +10,6 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from psycopg2 import pool
 
-
 S3_BUCKET = os.getenv("BDI_S3_BUCKET", "bdi-aircraft-gio-s3")
 PG_HOST = os.getenv("BDI_DB_HOST", "localhost")
 PG_PORT = int(os.getenv("BDI_DB_PORT", "5432"))
@@ -18,28 +17,23 @@ PG_DBNAME = os.getenv("BDI_DB_DBNAME", "postgres")
 PG_USER = os.getenv("BDI_DB_USERNAME", "postgres")
 PG_PASSWORD = os.getenv("BDI_DB_PASSWORD", "postgres")
 
-
-def get_connection_pool():
-    return pool.ThreadedConnectionPool(
-        minconn=1,
-        maxconn=10,
-        dbname=PG_DBNAME,
-        user=PG_USER,
-        password=PG_PASSWORD,
-        host=PG_HOST,
-        port=PG_PORT,
-    )
-
+conn_pool = pool.ThreadedConnectionPool(
+    minconn=1,
+    maxconn=10,
+    dbname=PG_DBNAME,
+    user=PG_USER,
+    password=PG_PASSWORD,
+    host=PG_HOST,
+    port=PG_PORT,
+)
 
 @contextmanager
 def get_db_conn():
-    pool_conn = get_connection_pool()
-    conn = pool_conn.getconn()
+    conn = conn_pool.getconn()
     try:
         yield conn
     finally:
-        pool_conn.putconn(conn)
-
+        conn_pool.putconn(conn)
 
 def ensure_fuel_table():
     with get_db_conn() as conn:
@@ -53,10 +47,9 @@ def ensure_fuel_table():
                     category TEXT,
                     source TEXT
                 );
-            """
+                """
             )
             conn.commit()
-
 
 def download_and_process_fuel_rates(**context):
     url = "https://raw.githubusercontent.com/martsec/flight_co2_analysis/main/data/aircraft_type_fuel_consumption_rates.json"
@@ -102,7 +95,7 @@ def download_and_process_fuel_rates(**context):
     ensure_fuel_table()
     with get_db_conn() as conn:
         with conn.cursor() as cur:
-            for row in prepared_data:
+            for i, row in enumerate(prepared_data, start=1):
                 cur.execute(
                     """
                     INSERT INTO aircraft_fuel_consumption (
@@ -122,9 +115,11 @@ def download_and_process_fuel_rates(**context):
                         row["source"],
                     ),
                 )
+                if i % 100 == 0:
+                    print(f"[DB] Inserted {i} rows...")
+                    conn.commit()
             conn.commit()
-            print(f"[DB] Inserted {len(prepared_data)} rows into fuel table")
-
+            print(f"[DB] Finished inserting {len(prepared_data)} rows into fuel table")
 
 default_args = {
     "owner": "airflow",

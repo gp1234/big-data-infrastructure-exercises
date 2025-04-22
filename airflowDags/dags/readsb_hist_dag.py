@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from io import BytesIO
 from datetime import datetime, timedelta
 from contextlib import contextmanager
@@ -18,7 +19,7 @@ PG_DBNAME = os.getenv("BDI_DB_DBNAME", "postgres")
 PG_USER = os.getenv("BDI_DB_USERNAME", "postgres")
 PG_PASSWORD = os.getenv("BDI_DB_PASSWORD", "postgres")
 
-CONN_POOL = pool.ThreadedConnectionPool(
+conn_pool = pool.ThreadedConnectionPool(
     minconn=1,
     maxconn=10,
     dbname=PG_DBNAME,
@@ -30,27 +31,29 @@ CONN_POOL = pool.ThreadedConnectionPool(
 
 @contextmanager
 def get_db_conn():
-    conn = CONN_POOL.getconn()
+    conn = conn_pool.getconn()
     try:
         yield conn
     finally:
-        CONN_POOL.putconn(conn)
+        conn_pool.putconn(conn)
 
 def ensure_tables_exist(cursor):
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS traces (
         id SERIAL PRIMARY KEY,
         icao TEXT NOT NULL,
-        registration TEXT NULL,
-        type TEXT NULL,
-        lat DOUBLE PRECISION NULL,
-        lon DOUBLE PRECISION NULL,
-        timestamp TEXT NULL,
-        max_alt_baro NUMERIC NULL,
-        max_ground_speed NUMERIC NULL,
-        had_emergency BOOLEAN DEFAULT FALSE
+        registration TEXT,
+        type TEXT,
+        lat DOUBLE PRECISION,
+        lon DOUBLE PRECISION,
+        timestamp TEXT,
+        max_alt_baro NUMERIC,
+        max_ground_speed NUMERIC,
+        had_emergency BOOLEAN DEFAULT FALSE,
+        day DATE
     );
     CREATE INDEX IF NOT EXISTS idx_traces_icao ON traces (icao);
+    CREATE INDEX IF NOT EXISTS idx_traces_day ON traces (day);
     """)
 
 def download_files(**context):
@@ -105,7 +108,6 @@ def prepare_files(**context):
     with get_db_conn() as conn:
         with conn.cursor() as cur:
             ensure_tables_exist(cur)
-
             inserted_rows = 0
             for page in pages:
                 for obj in page.get("Contents", []):
@@ -114,8 +116,11 @@ def prepare_files(**context):
                         continue
                     print(f"[PROCESS] Reading {key}")
 
-                    raw_data = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
+                    day_match = re.search(r"day=(\d{8})", key)
+                    day_val = datetime.strptime(day_match.group(1), "%Y%m%d").date() if day_match else None
+
                     try:
+                        raw_data = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
                         data = json.loads(raw_data)
                     except Exception as e:
                         print(f"[ERROR] Failed to parse {key}: {e}")
@@ -124,30 +129,30 @@ def prepare_files(**context):
                     for entry in data.get("aircraft", []):
                         icao = entry.get("hex")
                         try:
-                            cur.execute(
-                                """
+                            cur.execute("""
                                 INSERT INTO traces
-                                (icao, lat, lon, timestamp, max_alt_baro, max_ground_speed, had_emergency, registration, type)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-                                """,
-                                (
-                                    icao,
-                                    entry.get("lat", 0.0) if isinstance(entry.get("lat"), (int, float)) else 0.0,
-                                    entry.get("lon", 0.0) if isinstance(entry.get("lon"), (int, float)) else 0.0,
-                                    entry.get("seen_pos", ""),
-                                    entry.get("alt_baro", 0.0) if isinstance(entry.get("alt_baro"), (float,)) else 0.0,
-                                    entry.get("gs", 0.0) if isinstance(entry.get("gs"), (float,)) else 0.0,
-                                    entry.get("alert") == 1,
-                                    entry.get("r", None),
-                                    entry.get("t", None)
-                                )
-                            )
+                                (icao, lat, lon, timestamp, max_alt_baro, max_ground_speed, had_emergency, registration, type, day)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                            """, (
+                                icao,
+                                entry.get("lat", 0.0) if isinstance(entry.get("lat"), (int, float)) else 0.0,
+                                entry.get("lon", 0.0) if isinstance(entry.get("lon"), (int, float)) else 0.0,
+                                entry.get("seen_pos", ""),
+                                entry.get("alt_baro", 0.0) if isinstance(entry.get("alt_baro"), (float,)) else 0.0,
+                                entry.get("gs", 0.0) if isinstance(entry.get("gs"), (float,)) else 0.0,
+                                entry.get("alert") == 1,
+                                entry.get("r"),
+                                entry.get("t"),
+                                day_val
+                            ))
                             inserted_rows += 1
+                            if inserted_rows % 500 == 0:
+                                print(f"[DB] Inserted {inserted_rows} rows...")
+                                conn.commit()
                         except Exception as e:
                             print(f"[WARN] Skipping entry for {icao}: {e}")
-
             conn.commit()
-            print(f"[DB] Total rows inserted: {inserted_rows}")
+            print(f"[DB] ✅ Final commit — total rows inserted: {inserted_rows}")
 
 default_args = {
     "owner": "airflow",

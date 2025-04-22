@@ -35,13 +35,11 @@ def list_aircraft(num_results: int = 100, page: int = 0) -> list[AircraftReturn]
         user=db_credentials.username,
         password=db_credentials.password,
     )
-
     cur = conn.cursor()
-
     cur.execute("""
         SELECT DISTINCT t.icao, t.registration, t.type, r.ownop, r.manufacturer, r.model
         FROM traces t
-        JOIN aircraft_registry r ON t.icao = r.icao
+        LEFT JOIN aircraft_registry r ON t.icao = r.icao
         ORDER BY t.icao ASC
         LIMIT %s OFFSET %s;
     """, (num_results, page * num_results))
@@ -77,25 +75,27 @@ def get_aircraft_co2(icao: str, day: str) -> AircraftCO2:
     )
     cur = conn.cursor()
 
+    # Count how many 5s rows exist for this aircraft and day
     cur.execute("""
         SELECT COUNT(*) FROM traces
-        WHERE icao = %s AND to_char(to_timestamp(timestamp, 'YYYY-MM-DD"T"HH24:MI:SS'), 'YYYY-MM-DD') = %s;
+        WHERE icao = %s AND day = %s;
     """, (icao, day))
     count = cur.fetchone()[0]
-
     hours_flown = (count * 5) / 3600.0
 
+    # Try to find the fuel rate from short_type
     cur.execute("""
-        SELECT r.short_type, f.galph FROM aircraft_registry r
+        SELECT r.short_type, f.galph 
+        FROM aircraft_registry r
         JOIN aircraft_fuel_consumption f ON r.short_type = f.aircraft_type
         WHERE r.icao = %s;
     """, (icao,))
-
     fuel_info = cur.fetchone()
+
     cur.close()
     conn.close()
 
-    if fuel_info is None:
+    if not fuel_info:
         return AircraftCO2(icao=icao, hours_flown=hours_flown, co2=None)
 
     galph = fuel_info[1]

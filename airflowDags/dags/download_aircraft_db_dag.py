@@ -18,28 +18,23 @@ PG_DBNAME = os.getenv("BDI_DB_DBNAME", "postgres")
 PG_USER = os.getenv("BDI_DB_USERNAME", "postgres")
 PG_PASSWORD = os.getenv("BDI_DB_PASSWORD", "postgres")
 
-
-def get_connection_pool():
-    return pool.ThreadedConnectionPool(
-        minconn=1,
-        maxconn=10,
-        dbname=PG_DBNAME,
-        user=PG_USER,
-        password=PG_PASSWORD,
-        host=PG_HOST,
-        port=PG_PORT,
-    )
-
+conn_pool = pool.ThreadedConnectionPool(
+    minconn=1,
+    maxconn=10,
+    dbname=PG_DBNAME,
+    user=PG_USER,
+    password=PG_PASSWORD,
+    host=PG_HOST,
+    port=PG_PORT,
+)
 
 @contextmanager
 def get_db_conn():
-    pool_conn = get_connection_pool()
-    conn = pool_conn.getconn()
+    conn = conn_pool.getconn()
     try:
         yield conn
     finally:
-        pool_conn.putconn(conn)
-
+        conn_pool.putconn(conn)
 
 def ensure_registry_table():
     with get_db_conn() as conn:
@@ -62,7 +57,6 @@ def ensure_registry_table():
                 """
             )
             conn.commit()
-
 
 def download_and_process_registry(**context):
     url = "http://downloads.adsbexchange.com/downloads/basic-ac-db.json.gz"
@@ -98,9 +92,12 @@ def download_and_process_registry(**context):
 
     ensure_registry_table()
 
+    inserted_rows = 0
     with get_db_conn() as conn:
         with conn.cursor() as cur:
             for row in data:
+                if not row.get("icao"):
+                    continue
                 cur.execute(
                     """
                     INSERT INTO aircraft_registry (
@@ -133,8 +130,12 @@ def download_and_process_registry(**context):
                         row.get("mil"),
                     ),
                 )
+                inserted_rows += 1
+                if inserted_rows % 500 == 0:
+                    print(f"[DB] Inserted {inserted_rows} rows...")
+                    conn.commit()
             conn.commit()
-
+    print(f"[DB] Total inserted or updated: {inserted_rows}")
 
 default_args = {
     "owner": "airflow",
